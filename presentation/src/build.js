@@ -1,470 +1,506 @@
+// Keynote-style WWI aviation deck: real archival photos (Smithsonian Open Access, CC0),
+// background-removed cutouts, 1914 maps from real geodata, Morph ("Трансформация") transitions.
 const pptxgen = require("pptxgenjs");
-const art = require("./art");
+const fs = require("fs");
+const path = require("path");
 
+const A = (f) => path.join(__dirname, "assets", f);
+const DIMS = JSON.parse(fs.readFileSync(path.join(__dirname, "dims.json")));
+const GEO = JSON.parse(fs.readFileSync(path.join(__dirname, "geo.json")));
 const W = 13.333, H = 7.5, TOTAL = 14;
+
 const C = {
-  paper: "EFE8D8", card: "E3D8BE", line: "C9BD9C", ink: "1E1D1A", muted: "57513F",
-  panel: "27301F", onPanel: "F2EBDA", khaki: "D8C79F", khakiD: "A8966C", red: "A3262A", olive: "4A5A2E",
+  bg: "07090D", txt: "F5F3EF", txt2: "B4BAC3", txt3: "7C838F", line: "2A2F38",
+  lbg: "F5F5F7", ltxt: "1D1D1F", ltxt2: "515154", ltxt3: "86868B", lline: "D2D2D7",
+  red: "FF453A", orange: "FF9F0A", yellow: "FFD60A", gold: "E3B64E", goldDark: "A8781E",
+  teal: "64D2FF", blue: "0A84FF", indigo: "7D7AFF", purple: "BF5AF2", green: "30D158",
+  ent: "4E93D8", cen: "E4543F",
 };
-const HF = "Cambria", BF = "Calibri";
+const HF = "Calibri", SERIF = "Cambria";
 
-(async () => {
-  const pres = new pptxgen();
-  pres.layout = "LAYOUT_WIDE";
-  pres.title = "Авиация Первой мировой войны";
-  pres.subject = "История. Презентация на 14 слайдов";
+const pres = new pptxgen();
+pres.layout = "LAYOUT_WIDE";
+pres.title = "Авиация Первой мировой войны";
+pres.author = "Пономарев Глеб";
+pres.subject = "История, 10В класс";
 
-  // ---------- artwork ----------
-  const hex = (c) => "#" + c;
-  const IMG = {
-    plane: await art.png(art.biplaneTop(hex(C.khaki), hex(C.panel)), 900),
-    tri: await art.png(art.triplaneSide(hex(C.khaki), hex(C.panel)), 900),
-    muromets: await art.png(art.muromets(hex(C.khaki), hex(C.panel)), 1000),
-    photo: await art.png(art.aerialPhoto(), 900),
-    sync: await art.png(art.synchronizer(hex(C.khaki), "#D9573F", hex(C.panel)), 900),
-    carrier: await art.png(art.carrier(hex(C.khaki), hex(C.panel)), 1000),
+// ---------- helpers ----------
+const ratio = (f) => DIMS[f][1] / DIMS[f][0];
+const T = (s, text, o) => s.addText(text, { fontFace: HF, fontSize: 14, color: C.txt, margin: 0, valign: "top", isTextBox: true, ...o });
+const img = (s, f, x, y, w, h, o = {}) => s.addImage({ path: A(f), x, y, w, h: h ?? w * ratio(f), ...o });
+const cover = (s, f, x, y, w, h, o = {}) => s.addImage({ path: A(f), x, y, w, h, sizing: { type: "cover", w, h }, ...o });
+const rect = (s, x, y, w, h, color, o = {}) => s.addShape(pres.shapes.RECTANGLE, { x, y, w, h, fill: { color }, line: { color, width: 0 }, ...o });
+const rrect = (s, x, y, w, h, color, o = {}) => s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w, h, rectRadius: 0.12, fill: { color }, line: { color, width: 0 }, ...o });
+
+function chrome(s, n, { accent, kicker, title, light = false, titleW = 8.5, titleSize = 38, titleX = 0.6 }) {
+  s.background = { color: light ? C.lbg : C.bg };
+  const t1 = light ? C.ltxt : C.txt;
+  if (kicker) T(s, kicker, { x: titleX, y: 0.42, w: 9, h: 0.3, fontSize: 12, bold: true, charSpacing: 2.5, color: accent, objectName: "!!kicker" });
+  if (title) T(s, title, { x: titleX, y: 0.72, w: titleW, h: 0.8, fontSize: titleSize, bold: true, charSpacing: -0.5, color: t1, valign: "middle", objectName: "!!title" });
+  // progress: thin track + accent fill that grows slide by slide (Morph animates it)
+  rect(s, 0.6, 7.13, 2.4, 0.035, light ? C.lline : C.line, { objectName: "!!track" });
+  rect(s, 0.6, 7.13, (2.4 * n) / TOTAL, 0.035, accent, { objectName: "!!prog" });
+  T(s, `${String(n).padStart(2, "0")} / ${TOTAL}`, { x: 11.73, y: 7.02, w: 1.0, h: 0.25, fontSize: 10, align: "right", color: light ? C.ltxt3 : C.txt3, objectName: "!!pg" });
+}
+
+// place a map image: returns a projector from map pixels to slide inches
+function placeMap(s, file, key, spp, anchor, at, name) {
+  const g = GEO[key];
+  const p = g.pts[anchor];
+  const x0 = at[0] - p[0] * spp, y0 = at[1] - p[1] * spp;
+  s.addImage({ path: A(file), x: x0, y: y0, w: g.W * spp, h: g.H * spp, objectName: name });
+  return (k) => [x0 + g.pts[k][0] * spp, y0 + g.pts[k][1] * spp];
+}
+
+function marker(s, x, y, color, size = 0.16, ring = true) {
+  if (ring) s.addShape(pres.shapes.OVAL, { x: x - size * 1.4, y: y - size * 1.4, w: size * 2.8, h: size * 2.8, fill: { color, transparency: 78 }, line: { color, width: 1, transparency: 30 } });
+  s.addShape(pres.shapes.OVAL, { x: x - size / 2, y: y - size / 2, w: size, h: size, fill: { color }, line: { color: "FFFFFF", width: 1.25 } });
+}
+
+// off-canvas copy of a named object: Morph flies it in/out between slides
+const ghost = (s, f, name, x, y, w, rotate = 0) => s.addImage({ path: A(f), x, y, w, h: w * ratio(f), rotate, objectName: name });
+
+function caption(s, text, x, y, w, h, o = {}) {
+  T(s, text, { x, y, w, h, fontSize: 9.5, color: C.txt3, ...o });
+}
+
+// =====================================================================
+// 1. TITLE
+{
+  const s = pres.addSlide();
+  chrome(s, 1, { accent: C.red });
+  img(s, "glow_red.png", 5.2, -1.0, 9.0, 9.0, { transparency: 10 });
+  T(s, "1914–1918", { x: 0.35, y: 0.05, w: 12.8, h: 2.9, fontSize: 196, bold: true, charSpacing: -6, color: "161920", valign: "middle", objectName: "!!big" });
+  img(s, "pfalz.png", 4.85, 0.75, 8.3, null, { rotate: -4, objectName: "!!pfalz" });
+  T(s, "ПРЕЗЕНТАЦИЯ ПО ИСТОРИИ", { x: 0.6, y: 4.3, w: 6, h: 0.3, fontSize: 12, bold: true, charSpacing: 2.5, color: C.red, objectName: "!!kicker" });
+  T(s, "Авиация Первой мировой войны", { x: 0.6, y: 4.6, w: 7.6, h: 1.75, fontSize: 50, bold: true, charSpacing: -1, color: C.txt, objectName: "!!title" });
+  T(s, "Как небо стало полем боя", { x: 0.6, y: 6.45, w: 6.5, h: 0.4, fontSize: 20, color: C.txt2 });
+  T(s, "Пономарев Глеб, 10В класс", { x: 0.6, y: 6.83, w: 6.5, h: 0.3, fontSize: 14, bold: true, color: C.txt });
+  caption(s, "Pfalz D.XII, Германия, 1918 · Музей авиации и космонавтики США", 7.4, 5.15, 5.4, 0.3, { align: "right" });
+  ghost(s, "flyer.png", "!!flyer", -4.6, 2.3, 2.9);
+  s.addNotes("Добрый день! Моя презентация посвящена авиации Первой мировой войны. На слайде настоящий немецкий истребитель Pfalz D.XII 1918 года из Национального музея авиации и космонавтики США. В 1914 году самолёт был хрупкой машиной из дерева и ткани, и многие генералы видели в нём забаву. За четыре года небо стало полем боя: появились истребители, бомбардировщики, асы и самостоятельные военно-воздушные силы. Все фотографии в презентации — настоящие музейные экспонаты, рисунки сделаны военными художниками в 1918 году, а карты построены по реальным географическим данным.");
+}
+
+// 2. PROLOGUE — Europe 1914 map with aircraft counts
+{
+  const s = pres.addSlide();
+  const spp = W / GEO.europe1914.W;
+  const P = placeMap(s, "europe1914.jpg", "europe1914", spp, "paris", [GEO.europe1914.pts.paris[0] * spp, GEO.europe1914.pts.paris[1] * spp], "!!map");
+  img(s, "grad_bottom.png", 0, 4.7, W, 2.8);
+  img(s, "grad_top.png", 0, 0, W, 1.9);
+  chrome(s, 2, { accent: C.gold, kicker: "ПРОЛОГ · 1903–1913", title: "Накануне: спорт или оружие?" });
+  // aircraft counts pinned to the powers
+  const badge = (k, num, label, dx = 0, dy = 0, align = "center") => {
+    const [x, y] = P(k);
+    marker(s, x, y, C.txt, 0.11, false);
+    const bx = align === "center" ? x - 0.9 + dx : x + dx;
+    T(s, [{ text: num, options: { fontSize: 30, bold: true, color: C.txt, breakLine: true } }, { text: label, options: { fontSize: 11, color: C.txt2 } }],
+      { x: bx, y: y + dy, w: 1.8, h: 0.9, align });
   };
-  const iconNames = ["GiBinoculars", "GiCrosshair", "GiPhotoCamera", "GiPistolGun", "GiFallingBomb", "GiMachineGun",
-    "GiAnchor", "GiZeppelin", "GiBomber", "GiAntiAircraftGun", "GiBiplane", "GiParachute", "GiThermometerCold",
-    "GiDrop", "GiSteampunkGoggles", "GiBrodieHelmet", "GiOpenBook", "GiScrollUnfurled", "GiCommercialAirplane",
-    "GiAirplaneDeparture", "GiLaurelCrown", "GiFactory", "GiCog", "GiMedal"];
-  const ICON = {}, ICON_D = {};
-  for (const n of iconNames) {
-    ICON[n] = await art.icon(n, C.khaki);   // light icon, for dark circles / panel
-    ICON_D[n] = await art.icon(n, C.panel); // dark icon, for light circles
-  }
+  badge("russia", "244", "самолёта · Россия", 0, 0.1);
+  badge("germany", "232", "Германия", 0, 0.12);
+  badge("france", "138", "Франция", 0, 0.12);
+  badge("uk", "56*", "Британия", 0.22, -0.35, "left");
+  // legend
+  const leg = [[C.ent, 0, "Антанта"], [C.cen, 0, "Центральные державы"], [C.ent, 55, "светлее — вступили в войну позже"], ["6B7078", 0, "нейтральные страны"]];
+  leg.forEach(([col, tr, t], i) => {
+    const y = 5.4 + i * 0.29;
+    s.addShape(pres.shapes.OVAL, { x: 10.35, y: y + 0.05, w: 0.15, h: 0.15, fill: { color: col, transparency: tr }, line: { color: col, width: 0.5 } });
+    T(s, t, { x: 10.6, y, w: 2.4, h: 0.26, fontSize: 10.5, color: C.txt2 });
+  });
+  caption(s, "* машины первой линии; данные на 1.08.1914, оценки различаются", 10.35, 6.58, 2.5, 0.36, { fontSize: 8.5 });
+  // Wright Flyer over the Atlantic
+  img(s, "flyer.png", 0.45, 2.05, 2.9, null, { objectName: "!!flyer" });
+  ghost(s, "pfalz.png", "!!pfalz", 14.6, -3.4, 5.2, -16);
+  ghost(s, "camera.png", "!!camera", 0.55, 8.2, 1.85);
+  caption(s, "«Флайер» братьев Райт, 1903. Оригинал хранится в Смитсоновском музее", 0.5, 3.52, 2.9, 0.4);
+  // timeline
+  const tl = [
+    ["1903", "Братья Райт: первый управляемый полёт с мотором — 12 секунд, 36 метров"],
+    ["1909", "Луи Блерио перелетел Ла-Манш: 40 км за 36,5 минуты"],
+    ["1911", "Итало-турецкая война: первая бомбардировка с самолёта (Дж. Гавотти)"],
+    ["1913", "Пётр Нестеров впервые выполнил «мёртвую петлю» над Киевом"],
+  ];
+  tl.forEach(([y, t], i) => {
+    const x = 0.6 + i * 2.42;
+    T(s, y, { x, y: 5.52, w: 2.2, h: 0.4, fontSize: 22, bold: true, color: C.gold });
+    T(s, t, { x, y: 5.95, w: 2.2, h: 0.95, fontSize: 11.5, color: C.txt2 });
+  });
+  s.addNotes("Вот Европа накануне войны: синим показаны страны Антанты, красным — Центральные державы. Цифры — сколько самолётов было у держав к 1 августа 1914 года: у России 244, у Германии 232, у Франции 138. Всего десятью годами раньше братья Райт впервые пролетели 36 метров, а в 1909 году Блерио перелетел Ла-Манш. Первая бомбардировка с самолёта случилась в 1911 году в Ливии, а в 1913-м Нестеров выполнил «мёртвую петлю». Но многие военные всё ещё считали авиацию спортом.");
+}
 
-  // ---------- helpers ----------
-  const T = (s, text, o) => s.addText(text, { fontFace: BF, fontSize: 14, color: C.ink, margin: 0, valign: "top", isTextBox: true, ...o });
-  const card = (s, x, y, w, h, color = C.card) =>
-    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w, h, rectRadius: 0.08, fill: { color }, line: { color, width: 0 } });
-  const iconDot = (s, name, x, y, d, onDark = false) => {
-    s.addShape(pres.shapes.OVAL, { x, y, w: d, h: d, fill: { color: onDark ? C.khaki : C.panel }, line: { color: onDark ? C.khaki : C.panel, width: 0 } });
-    const p = d * 0.22;
-    s.addImage({ data: onDark ? ICON_D[name] : ICON[name], x: x + p, y: y + p, w: d - 2 * p, h: d - 2 * p });
-  };
+// 3. RECONNAISSANCE — zoom into the map (Morph)
+{
+  const s = pres.addSlide();
+  const spp = 6.0 / (GEO.europe1914.pts.tannenberg[0] - GEO.europe1914.pts.paris[0]);
+  const P = placeMap(s, "europe1914.jpg", "europe1914", spp, "paris", [5.4, 4.7], "!!map");
+  img(s, "grad_left.png", 0, 0, 7.4, H);
+  img(s, "grad_bottom.png", 0, 5.4, W, 2.1);
+  chrome(s, 3, { accent: C.gold, kicker: "ГЛАВА 1 · 1914", title: "Глаза армии", titleW: 6 });
+  const [mx, my] = P("marne");
+  marker(s, mx, my, C.gold, 0.18);
+  T(s, [{ text: "Марна", options: { bold: true, fontSize: 17, color: C.txt, breakLine: true } }, { text: "3 сентября 1914: лётчики замечают, что армия фон Клюка поворачивает восточнее Парижа", options: { fontSize: 11.5, color: C.txt2 } }],
+    { x: mx + 0.35, y: my - 0.2, w: 3.0, h: 1.0 });
+  const [tx, ty] = P("tannenberg");
+  marker(s, tx, ty, C.gold, 0.18);
+  T(s, [{ text: "Танненберг", options: { bold: true, fontSize: 17, color: C.txt, breakLine: true } }, { text: "август 1914: немецкие лётчики следят за движением русской 2-й армии", options: { fontSize: 11.5, color: C.txt2 } }],
+    { x: tx - 3.35, y: ty - 1.3, w: 3.0, h: 1.0, align: "right" });
+  [["paris", "Париж", -1], ["berlin", "Берлин", 1], ["london", "Лондон", 1], ["warsaw", "Варшава", 1]].forEach(([k, n, side]) => {
+    const [x, y] = P(k);
+    s.addShape(pres.shapes.OVAL, { x: x - 0.05, y: y - 0.05, w: 0.1, h: 0.1, fill: { color: C.txt }, line: { color: C.txt, width: 0 } });
+    T(s, n, { x: side > 0 ? x + 0.1 : x - 1.3, y: y - 0.12, w: 1.2, h: 0.25, fontSize: 10.5, color: C.txt2, align: side > 0 ? "left" : "right" });
+  });
+  T(s, [{ text: "Разведка — главная работа самолёта в 1914 году. ", options: { bold: true, color: C.txt } },
+    { text: "С сентября лётчики корректируют огонь артиллерии по радио, а в марте 1915-го у Нев-Шапеля британцы впервые готовят наступление по картам, составленным по аэроснимкам.", options: { color: C.txt2 } }],
+    { x: 0.6, y: 1.65, w: 4.6, h: 1.6, fontSize: 13.5 });
+  T(s, "«Без лётчиков не было бы Танненберга»", { x: 0.6, y: 3.35, w: 4.6, h: 0.8, fontFace: SERIF, italic: true, fontSize: 20, color: C.gold });
+  caption(s, "Слова, приписываемые П. фон Гинденбургу", 0.6, 4.15, 4.4, 0.3, { fontSize: 10 });
+  img(s, "camera.png", 0.55, 4.8, 1.85, null, { objectName: "!!camera" });
+  ghost(s, "flyer.png", "!!flyer", 14.4, -2.4, 2.4, -12);
+  ghost(s, "voisin.png", "!!voisin", -9.6, 2.4, 8.0, 4);
+  T(s, [{ text: "Камера британского лётчика Уэсли Арчера. ", options: { bold: true, color: C.txt } },
+    { text: "После войны он «фотографировал» воздушные бои на моделях — подделку раскрыли только в 1980-х.", options: { color: C.txt2 } }],
+    { x: 2.6, y: 5.05, w: 2.9, h: 1.3, fontSize: 11 });
+  s.addNotes("В первые месяцы войны главной задачей самолёта была разведка. 3 сентября 1914 года лётчики заметили, что армия фон Клюка поворачивает восточнее Парижа и открывает фланг. Это помогло союзникам начать контрнаступление на Марне. На Востоке немецкая авиаразведка следила за русскими армиями перед Танненбергом. Вскоре появились корректировка огня по радио и аэрофотосъёмка. Интересный факт: камера на слайде принадлежала лётчику Уэсли Арчеру, который после войны снимал «воздушные бои» на моделях, и подделку разоблачили лишь в 1980-х.");
+}
 
-  // Persistent morph objects: !!panel, !!plane, !!year, !!title, !!count
-  function base(n, cfg) {
-    const s = pres.addSlide();
-    s.background = { color: C.paper };
-    const p = cfg.panel;
-    s.addShape(pres.shapes.RECTANGLE, { x: p[0], y: p[1], w: p[2], h: p[3], fill: { color: C.panel }, line: { color: C.panel, width: 0 }, objectName: "!!panel" });
-    const y = cfg.year;
-    T(s, y.text, { x: y.x, y: y.y, w: y.w || 4, h: y.h || 0.6, fontFace: HF, fontSize: y.size || 28, bold: true, color: C.khaki, objectName: "!!year" });
-    if (cfg.title) {
-      const t = cfg.title;
-      T(s, t.text, { x: t.x, y: t.y, w: t.w, h: t.h || 0.8, fontFace: HF, fontSize: t.size || 32, bold: true, color: t.dark ? C.onPanel : C.ink, valign: "middle", objectName: "!!title" });
-    }
-    const c = cfg.count || {};
-    T(s, `${String(n).padStart(2, "0")} / ${TOTAL}`, { x: c.x ?? W - 1.55, y: 6.95, w: 1.0, h: 0.3, fontSize: 10, align: "right", color: c.dark ? C.khaki : C.muted, objectName: "!!count" });
-    return s;
-  }
-  const plane = (s, x, y, w, rotate = 0) => s.addImage({ data: IMG.plane, x, y, w, h: w * 0.75, rotate, objectName: "!!plane" });
+// 4. FIRST AIR COMBAT — Voisin hero
+{
+  const s = pres.addSlide();
+  chrome(s, 4, { accent: C.red, kicker: "ГЛАВА 2 · 1914", title: "Первые воздушные бои", titleW: 6 });
+  img(s, "glow_red.png", 5.6, -0.6, 8.2, 8.2, { transparency: 20 });
+  img(s, "voisin.png", 5.1, 1.55, 8.0, null, { rotate: -3, objectName: "!!voisin" });
+  const ev = [
+    ["8 СЕНТЯБРЯ 1914", "Таран Нестерова", "Под Жолквой Пётр Нестеров ударил своим самолётом австрийский «Альбатрос». Погибли оба экипажа — это первый воздушный таран в истории."],
+    ["5 ОКТЯБРЯ 1914", "Первая победа пулемётом", "Под Реймсом Жозеф Франц и Луи Кено на «Вуазене III» сбили германский «Авиатик» из пулемёта «Гочкис»."],
+  ];
+  ev.forEach(([d, h, t], i) => {
+    const y = 1.85 + i * 2.25;
+    T(s, d, { x: 0.6, y, w: 4.5, h: 0.3, fontSize: 12, bold: true, charSpacing: 2, color: C.red });
+    T(s, h, { x: 0.6, y: y + 0.32, w: 4.5, h: 0.5, fontSize: 24, bold: true, color: C.txt });
+    T(s, t, { x: 0.6, y: y + 0.88, w: 4.3, h: 1.2, fontSize: 13, color: C.txt2 });
+  });
+  ghost(s, "camera.png", "!!camera", 0.55, 8.3, 1.85);
+  T(s, "До этого лётчики стреляли друг в друга из пистолетов и карабинов.", { x: 0.6, y: 6.45, w: 4.6, h: 0.5, fontSize: 12, italic: true, color: C.txt3 });
+  caption(s, "«Вуазен» тип 8 (1916) — прямой потомок «Вуазена III». Экземпляр Смитсоновского музея — старейший сохранившийся самолёт, построенный как бомбардировщик", 7.3, 5.25, 5.4, 0.6, { align: "right" });
+  s.addNotes("Сначала лётчики противников даже приветствовали друг друга, но очень скоро в ход пошли пистолеты и карабины. 8 сентября 1914 года Пётр Нестеров, пытаясь остановить австрийского разведчика, ударил его своим самолётом. Погибли все. Это был первый воздушный таран. А 5 октября француз Жозеф Франц и механик Луи Кено сбили немецкий самолёт из пулемёта. Они летели на «Вуазене» — самолёте того же семейства, что и на фотографии. Так родился воздушный бой.");
+}
 
-  // =====================================================================
-  // 1. Title
-  {
-    const s = base(1, { panel: [0, 0, W, H], year: { text: "1914–1918", x: 0.8, y: 1.15, w: 5, size: 30 }, count: { dark: true } });
-    plane(s, 7.6, 0.9, 5.0, 28);
-    T(s, "Авиация Первой мировой войны", { x: 0.8, y: 1.95, w: 7.2, h: 2.4, fontFace: HF, fontSize: 52, bold: true, color: C.onPanel, valign: "middle", objectName: "!!title" });
-    T(s, "Как небо стало полем боя", { x: 0.8, y: 4.45, w: 7, h: 0.6, fontFace: HF, fontSize: 24, italic: true, color: C.khaki });
-    T(s, "Подготовил(а): ____________________      Класс / группа: ________      2026", { x: 0.8, y: 6.3, w: 9, h: 0.4, fontSize: 14, color: C.khakiD });
-    s.addNotes("Добрый день! Тема моего выступления — авиация Первой мировой войны. В 1914 году самолёт был хрупкой «этажеркой» из дерева и полотна, которую многие генералы считали забавой. Через четыре года небо стало полноценным полем боя: появились истребители, бомбардировщики, асы и первые самостоятельные военно-воздушные силы. Я расскажу, как это произошло, какие изобретения изменили войну в воздухе и какую роль сыграли российские лётчики и конструкторы.");
-  }
+// 5. SYNCHRONISER — full-bleed gun photo
+{
+  const s = pres.addSlide();
+  chrome(s, 5, { accent: C.orange, kicker: "ГЛАВА 2 · 1915", title: "Стрельба сквозь винт", titleW: 5.2 });
+  cover(s, "gun_photo.jpg", 5.5, 0, W - 5.5, H);
+  img(s, "grad_left.png", 5.45, 0, 3.4, H);
+  img(s, "grad_bottom.png", 5.5, 5.6, W - 5.5, 1.9);
+  const tl = [
+    ["1 апр. 1915", "Ролан Гаррос сбивает самолёт, стреляя сквозь винт: стальные клинья на лопастях отражают пули"],
+    ["18 апр. 1915", "Гаррос садится за линией фронта и попадает в плен. Немцы изучают его самолёт"],
+    ["лето 1915", "Фирма Фоккера ставит синхронизатор: мотор «разрешает» выстрел, только когда перед стволом нет лопасти"],
+    ["1 июля 1915", "Курт Винтгенс ведёт первый бой с синхронным пулемётом. Начинается «бич Фоккера»"],
+    ["начало 1916", "Nieuport 11 и Airco DH.2 возвращают союзникам равенство в воздухе"],
+  ];
+  s.addShape(pres.shapes.LINE, { x: 0.72, y: 1.78, w: 0, h: 4.75, line: { color: C.line, width: 1.5 } });
+  tl.forEach(([d, t], i) => {
+    const y = 1.62 + i * 1.02;
+    s.addShape(pres.shapes.OVAL, { x: 0.64, y: y + 0.08, w: 0.16, h: 0.16, fill: { color: i === 2 ? C.orange : C.txt3 }, line: { color: C.bg, width: 2 } });
+    T(s, d, { x: 1.0, y, w: 1.4, h: 0.3, fontSize: 12.5, bold: true, color: i === 2 ? C.orange : C.txt });
+    T(s, t, { x: 2.4, y, w: 3.3, h: 0.95, fontSize: 12, color: C.txt2 });
+  });
+  ghost(s, "voisin.png", "!!voisin", 14.6, -3.2, 6.5, -14);
+  caption(s, "Синхронный пулемёт LMG 08/15 на истребителе Fokker D.VII (1918). За ним — «ромбовый» камуфляж крыла", 8.3, 6.55, 4.5, 0.4, { color: C.txt2, align: "right" });
+  s.addNotes("Главная проблема первых истребителей — винт перед лётчиком: стреляя вперёд, можно было отстрелить собственную лопасть. Француз Ролан Гаррос поставил на лопасти стальные клинья и сбил несколько самолётов, но 18 апреля 1915 года попал в плен. Вскоре фирма Фоккера создала синхронизатор: механизм связывал пулемёт с мотором, и выстрел происходил только в промежутке между лопастями. Истребители Фоккера полгода господствовали в небе — англичане назвали это «бичом Фоккера». На фото — синхронный пулемёт настоящего Fokker D.VII.");
+}
 
-  // 2. Before the war
-  {
-    const s = base(2, { panel: [0, 0, 4.4, H], year: { text: "1903–1913", x: 0.5, y: 0.5, w: 3.6, size: 30 },
-      title: { text: "Накануне: спорт или оружие?", x: 4.9, y: 0.4, w: 7.9 } });
-    s.addChart(pres.charts.BAR, [{ name: "Самолёты", labels: ["Британия*", "Франция", "Германия", "Россия"], values: [56, 138, 232, 244] }], {
-      x: 0.3, y: 1.35, w: 3.85, h: 3.4, barDir: "bar", chartColors: [C.khaki], barGapWidthPct: 55,
-      showTitle: true, title: "Самолёты к 1 августа 1914 г.", titleColor: C.onPanel, titleFontFace: HF, titleFontSize: 14,
-      catAxisLabelColor: C.onPanel, catAxisLabelFontSize: 12, catAxisLabelFontFace: BF, catAxisLineShow: false,
-      valAxisHidden: true, valGridLine: { style: "none" }, catGridLine: { style: "none" },
-      showValue: true, dataLabelColor: C.onPanel, dataLabelFontSize: 12, dataLabelPosition: "outEnd", showLegend: false,
-      plotArea: { fill: { color: C.panel } },
-    });
-    T(s, "* Британия — машины первой линии. Оценки численности в источниках различаются.", { x: 0.5, y: 4.8, w: 3.5, h: 0.6, fontSize: 10, color: C.khakiD });
-    plane(s, 1.3, 5.55, 1.8, -8);
-    // timeline
-    const xs = [4.9, 6.9, 8.9, 10.9], cw = 1.85;
-    s.addShape(pres.shapes.LINE, { x: 4.95, y: 2.3, w: 7.85, h: 0, line: { color: C.khakiD, width: 1.5 } });
-    const events = [
-      ["1903", "«Флайер» братьев Райт: первый управляемый полёт с мотором длится 12 секунд"],
-      ["1909", "Луи Блерио перелетает Ла-Манш за 37 минут"],
-      ["1911", "Итало-турецкая война: первая разведка и первая бомбардировка с аэроплана (Дж. Гавотти, 1 ноября)"],
-      ["1913", "П. Н. Нестеров впервые выполняет «мёртвую петлю» над Киевом"],
-    ];
-    events.forEach(([yr, txt], i) => {
-      T(s, yr, { x: xs[i], y: 1.55, w: cw, h: 0.5, fontFace: HF, fontSize: 22, bold: true, color: C.red });
-      s.addShape(pres.shapes.OVAL, { x: xs[i], y: 2.2, w: 0.2, h: 0.2, fill: { color: C.panel }, line: { color: C.paper, width: 2 } });
-      T(s, txt, { x: xs[i], y: 2.6, w: cw - 0.1, h: 1.6, fontSize: 13 });
-    });
-    card(s, 4.9, 4.55, 4.75, 2.25);
-    T(s, [
-      { text: "«Авиация — это хороший спорт, но для армии аэроплан — ноль»", options: { fontFace: HF, fontSize: 17, italic: true, breakLine: true } },
-      { text: "Фраза, приписываемая Фердинанду Фошу (около 1910 г.). До войны военные видели в самолёте в лучшем случае «летающий бинокль».", options: { fontSize: 12, color: C.muted, paraSpaceBefore: 8 } },
-    ], { x: 5.15, y: 4.75, w: 4.25, h: 1.9 });
-    T(s, "≈670", { x: 9.95, y: 4.5, w: 2.9, h: 1.0, fontFace: HF, fontSize: 54, bold: true, color: C.red });
-    T(s, "самолётов первой линии было у России, Германии, Франции и Британии вместе в начале войны", { x: 9.95, y: 5.5, w: 2.85, h: 1.3, fontSize: 13, color: C.ink });
-    s.addNotes("Всего за десять лет до войны братья Райт впервые поднялись в воздух на самолёте с мотором. В 1909 году Блерио перелетел Ла-Манш, а в 1911-м итальянцы в Ливии впервые применили самолёты в бою: лейтенант Гавотти сбросил с аэроплана несколько гранат. В 1913 году наш Пётр Нестеров выполнил «мёртвую петлю». При этом многие генералы считали авиацию спортом. К августу 1914 года у четырёх ведущих держав было лишь около 670 самолётов первой линии, и Россия по их числу была среди лидеров.");
-  }
+// 6. LINEUP — light "product" slide
+{
+  const s = pres.addSlide();
+  chrome(s, 6, { accent: C.blue, kicker: "ГЛАВА 3 · 1914–1918", title: "От «этажерки» к истребителю", light: true, titleW: 11 });
+  const planes = [
+    { f: "voisin.png", name: "«Вуазен»", meta: "Франция · 1914–1916", sp: "≈100–120", note: "Бомбардировщик-«этажерка» с толкающим винтом", col: C.ent, obj: "!!voisin" },
+    { f: "spad.png", name: "SPAD S.XIII", meta: "Франция · 1917", sp: "≈210", note: "8 472 машины к концу 1918 г. Летали Фонк, Гинемер, Рикенбакер", col: C.ent },
+    { f: "camel.png", name: "Sopwith Camel", meta: "Великобритания · 1917", sp: "≈185", note: "1 294 сбитых самолёта — рекорд среди истребителей союзников", col: C.ent },
+    { f: "fokker.png", name: "Fokker D.VII", meta: "Германия · 1918", sp: "≈190", note: "Единственный самолёт, названный в тексте перемирия", col: C.cen },
+    { f: "pfalz.png", name: "Pfalz D.XII", meta: "Германия · 1918", sp: "170", note: "Около 800 машин успели попасть на фронт", col: C.cen, obj: "!!pfalz" },
+  ];
+  planes.forEach((p, i) => {
+    const x = 0.55 + i * 2.5, bw = 2.38, bh = 1.62;
+    const r = ratio(p.f);
+    let w = bw, h = bw * r;
+    if (h > bh) { h = bh; w = bh / r; }
+    img(s, p.f, x + (bw - w) / 2, 1.62 + (bh - h), w, h, p.obj ? { objectName: p.obj } : {});
+    s.addShape(pres.shapes.OVAL, { x, y: 3.55, w: 0.12, h: 0.12, fill: { color: p.col }, line: { color: p.col, width: 0 } });
+    T(s, p.name, { x: x + 0.2, y: 3.44, w: 2.2, h: 0.35, fontSize: 16, bold: true, color: C.ltxt });
+    T(s, p.meta, { x, y: 3.82, w: 2.35, h: 0.3, fontSize: 11, color: C.ltxt2 });
+    T(s, p.sp, { x, y: 4.3, w: 2.35, h: 0.8, fontSize: 38, bold: true, charSpacing: -1, color: C.ltxt });
+    T(s, "км/ч максимальная скорость", { x, y: 5.08, w: 2.35, h: 0.3, fontSize: 10.5, color: C.ltxt3 });
+    T(s, p.note, { x, y: 5.55, w: 2.25, h: 0.95, fontSize: 11.5, color: C.ltxt2 });
+  });
+  T(s, "За четыре года скорость выросла примерно вдвое, мощность моторов — в 2,5–3 раза, а вместо карабина появились два синхронных пулемёта.", { x: 0.55, y: 6.45, w: 10.9, h: 0.5, fontSize: 12, color: C.ltxt3 });
+  s.addNotes("За войну самолёты изменились до неузнаваемости. Слева «Вуазен» — медленная «этажерка» с толкающим винтом, около 100 километров в час. Справа истребители 1917–1918 годов: SPAD, Sopwith Camel, Fokker D.VII и Pfalz, вдвое быстрее и с двумя синхронными пулемётами. SPAD выпустили почти в 8,5 тысяч экземпляров, а Camel сбил 1294 самолёта — больше всех истребителей союзников. Fokker D.VII так ценился, что перемирие отдельно требовало передать все эти машины союзникам. Все фото — настоящие самолёты из Смитсоновского музея.");
+}
 
-  // 3. Reconnaissance
-  {
-    const s = base(3, { panel: [8.6, 0, W - 8.6, H], year: { text: "1914", x: 9.05, y: 0.5, w: 3.8, size: 30 },
-      title: { text: "Глаза армии: разведка с воздуха", x: 0.55, y: 0.4, w: 7.9, size: 29 }, count: { dark: true } });
-    s.addImage({ data: IMG.photo, x: 9.05, y: 1.4, w: 3.85, h: 3.85 });
-    plane(s, 11.35, 3.95, 1.5, 215);
-    T(s, "Реконструкция: траншеи на аэрофотоснимке, разбитом сеткой квадратов для артиллерии", { x: 9.05, y: 5.4, w: 3.85, h: 0.8, fontSize: 11, color: C.khaki });
-    const rows = [
-      ["GiBinoculars", "Марна, сентябрь 1914", "3 сентября лётчики заметили, что 1-я германская армия фон Клюка поворачивает восточнее Парижа. Эти данные помогли союзникам нанести контрудар на Марне."],
-      ["GiCrosshair", "Корректировка огня", "С сентября 1914 г. британские экипажи передают поправки артиллерии по радио. Пушки начинают «видеть» за линию горизонта."],
-      ["GiPhotoCamera", "Аэрофотосъёмка", "В марте 1915 г. у Нев-Шапеля британцы впервые готовят наступление по картам, составленным с аэроснимков."],
-    ];
-    rows.forEach(([ic, head, body], i) => {
-      const y = 1.45 + i * 1.4;
-      card(s, 0.55, y, 7.6, 1.22);
-      iconDot(s, ic, 0.75, y + 0.26, 0.7);
-      T(s, [{ text: head, options: { bold: true, fontSize: 15, breakLine: true } }, { text: body, options: { fontSize: 13 } }], { x: 1.65, y: y + 0.13, w: 6.3, h: 1.0 });
-    });
-    T(s, [
-      { text: "«Без лётчиков не было бы Танненберга»", options: { fontFace: HF, fontSize: 20, italic: true, color: C.red, breakLine: true } },
-      { text: "Слова, приписываемые П. фон Гинденбургу: германская авиаразведка следила за движением русской 2-й армии", options: { fontSize: 12, color: C.muted } },
-    ], { x: 0.55, y: 5.75, w: 7.6, h: 1.1 });
-    s.addNotes("В первые месяцы войны главной задачей самолёта была разведка. 3 сентября 1914 года британские и французские лётчики увидели, что армия фон Клюка обходит Париж с востока, подставляя фланг. Это помогло союзникам начать контрнаступление на Марне и остановить германский блицкриг. На Восточном фронте немецкие разведчики следили за русскими войсками перед Танненбергом. Вскоре появились корректировка артиллерии по радио и аэрофотосъёмка: к 1915 году по снимкам уже составляли точные карты вражеских окопов.");
-  }
+// 7. STRATEGIC BOMBING — night, violet; Voisin magic-move
+{
+  const s = pres.addSlide();
+  chrome(s, 7, { accent: C.indigo, kicker: "ГЛАВА 4 · 1915–1918", title: "Война приходит в города", titleW: 7 });
+  cover(s, "art_raid.jpg", 8.7, 0, W - 8.7, H);
+  img(s, "grad_left.png", 8.65, 0, 2.4, H);
+  img(s, "glow_violet.png", 3.4, -0.9, 7.2, 7.2, { transparency: 15 });
+  img(s, "voisin.png", 3.85, 1.2, 6.4, null, { rotate: -9, objectName: "!!voisin" });
+  const st = [["557", "погибших от налётов цеппелинов на Британию"], ["162", "жертвы налёта бомбардировщиков «Гота» на Лондон 13 июня 1917 г. — самого кровавого за войну"]];
+  st.forEach(([n, t], i) => {
+    const y = 3.95 + i * 1.45;
+    T(s, n, { x: 0.6, y, w: 2.0, h: 0.9, fontSize: 54, bold: true, charSpacing: -1, color: C.txt });
+    T(s, t, { x: 2.45, y: y + 0.18, w: 2.7, h: 1.0, fontSize: 12, color: C.txt2 });
+  });
+  T(s, "С января 1915 г. Англию бомбят германские дирижабли, с 1917-го — тяжёлые бомбардировщики «Гота». В ответ рождается ПВО: прожекторы, зенитки, ночные истребители.", { x: 0.6, y: 1.65, w: 3.6, h: 1.9, fontSize: 13, color: C.txt2 });
+  img(s, "altimeter.png", 5.05, 4.4, 1.5);
+  T(s, [{ text: "Альтиметр с цеппелина L\u00A049. ", options: { bold: true, color: C.txt } }, { text: "Шкала — до 8 км. Дирижабль посадили французские лётчики в октябре 1917 г.", options: { color: C.txt2 } }],
+    { x: 6.7, y: 4.55, w: 1.95, h: 1.5, fontSize: 10.5 });
+  caption(s, "«Вуазен» 8 — ночной бомбардировщик, 1916", 6.1, 3.7, 2.5, 0.3);
+  ghost(s, "pfalz.png", "!!pfalz", 14.6, -3.4, 5.2, -16);
+  caption(s, "Дж. Хардинг. «Воздушный налёт, Фер-ан-Тарденуа», около 1918 г.", 9.2, 6.7, 3.6, 0.4, { color: C.txt2, align: "right" });
+  s.addNotes("Впервые война пришла к мирным жителям с неба. С 1915 года германские цеппелины бомбили Англию: за войну их налёты унесли 557 жизней. Альтиметр на слайде — с настоящего цеппелина L 49, который французские лётчики принудили к посадке в 1917 году. С 1917 года Лондон бомбили самолёты «Гота»: налёт 13 июня унёс 162 жизни. Союзники тоже создали бомбардировочную авиацию, например французские «Вуазены». В ответ появилась противовоздушная оборона: прожекторы, зенитки и ночные истребители. На картине американский военный художник изобразил ночной налёт.");
+}
 
-  // 4. Birth of air combat
-  {
-    const s = base(4, { panel: [0, 0, 6.1, H], year: { text: "1914", x: 0.55, y: 1.25, w: 3, size: 30 },
-      title: { text: "Первые воздушные бои", x: 0.55, y: 0.4, w: 5.4, size: 27, dark: true } });
-    T(s, [
-      { text: "8 СЕНТЯБРЯ · ВОСТОЧНЫЙ ФРОНТ", options: { bold: true, fontSize: 14, color: C.khaki, charSpacing: 1, breakLine: true } },
-      { text: "Под Жолквой штабс-капитан П. Н. Нестеров таранит австрийский разведчик «Альбатрос». Погибают оба экипажа.", options: { fontSize: 16, color: C.onPanel, paraSpaceBefore: 6, breakLine: true } },
-      { text: "Первый воздушный таран в истории.", options: { fontSize: 16, bold: true, color: C.onPanel, paraSpaceBefore: 6 } },
-    ], { x: 0.55, y: 2.25, w: 5.1, h: 2.6 });
-    plane(s, 3.6, 4.85, 2.0, -35);
-    T(s, "Нестеров первым доказал, что самолёт может уничтожить самолёт, но заплатил за это жизнью.", { x: 0.55, y: 5.2, w: 2.9, h: 1.5, fontSize: 12, italic: true, color: C.khaki });
-    T(s, [
-      { text: "5 ОКТЯБРЯ · ЗАПАДНЫЙ ФРОНТ", options: { bold: true, fontSize: 14, color: C.red, charSpacing: 1, breakLine: true } },
-      { text: "Под Реймсом сержант Жозеф Франц и механик Луи Кено на «Вуазене» сбивают германский «Авиатик» из пулемёта «Гочкис».", options: { fontSize: 16, paraSpaceBefore: 6, breakLine: true } },
-      { text: "Первая победа, одержанная огнём пулемёта.", options: { fontSize: 16, bold: true, paraSpaceBefore: 6 } },
-    ], { x: 6.6, y: 1.45, w: 6.2, h: 2.6 });
-    T(s, "Чем воевали в воздухе в 1914 году", { x: 6.6, y: 4.35, w: 6.2, h: 0.4, fontFace: HF, fontSize: 17, bold: true });
-    const steps = [["GiPistolGun", "Пистолеты и карабины в руках лётчика"], ["GiFallingBomb", "Стальные стрелы-флешетты против пехоты"], ["GiMachineGun", "Пулемёт у наблюдателя"]];
-    steps.forEach(([ic, txt], i) => {
-      const x = 6.6 + i * 2.1;
-      iconDot(s, ic, x, 4.95, 0.75);
-      T(s, txt, { x, y: 5.85, w: 1.85, h: 0.9, fontSize: 12.5 });
-      if (i < 2) T(s, "→", { x: x + 0.95, y: 5.05, w: 0.9, h: 0.5, fontSize: 24, color: C.khakiD, align: "center" });
-    });
-    s.addNotes("Сначала лётчики противников иногда просто приветствовали друг друга. Но очень быстро в ход пошли пистолеты и карабины. 8 сентября 1914 года Пётр Нестеров, пытаясь помешать австрийскому разведчику, ударил его своим самолётом. Погибли и австрийцы, и сам Нестеров. Это был первый воздушный таран. А 5 октября французский экипаж Франца и Кено сбил немецкий самолёт из пулемёта. С этого момента стало ясно, что самолёту нужно оружие, а войне в воздухе — новая техника.");
-  }
+// 8. RUSSIA — blueprint
+{
+  const s = pres.addSlide();
+  chrome(s, 8, { accent: C.teal, kicker: "ГЛАВА 5 · РОССИЯ", title: "Россия: крылья империи", titleW: 9 });
+  s.background = { path: A("blueprint_bg.jpg") };
+  img(s, "muromets_bp.png", 0.55, 1.9, 6.7);
+  T(s, "«ИЛЬЯ МУРОМЕЦ» · И. И. СИКОРСКИЙ · 1913", { x: 0.6, y: 1.55, w: 7, h: 0.3, fontSize: 11, bold: true, charSpacing: 2, color: C.teal });
+  T(s, [{ text: "Первый в мире серийный четырёхмоторный бомбардировщик. ", options: { bold: true, color: C.txt } },
+    { text: "Эскадра воздушных кораблей совершила около 400 боевых вылетов и сбросила 65 т бомб, а в воздушном бою потеряла лишь один корабль.", options: { color: "C9DDF2" } }],
+    { x: 0.6, y: 6.5, w: 7.2, h: 0.55, fontSize: 11 });
+  const ppl = [
+    ["Пётр Нестеров", "«мёртвая петля» (1913) и первый воздушный таран (1914)"],
+    ["Игорь Сикорский", "«Русский витязь» (1913) — первый в мире четырёхмоторный самолёт"],
+    ["Александр Казаков", "лучший ас России: 17 официальных побед"],
+    ["Дмитрий Григорович", "летающие лодки М‑5 и М‑9 для Балтики и Чёрного моря"],
+    ["Глеб Котельников", "ранцевый парашют РК‑1 (1911)"],
+  ];
+  ppl.forEach(([n, t], i) => {
+    const y = 1.65 + i * 0.9;
+    s.addShape(pres.shapes.LINE, { x: 8.3, y: y - 0.08, w: 4.4, h: 0, line: { color: "3E6E9E", width: 0.75 } });
+    T(s, n, { x: 8.3, y, w: 4.4, h: 0.3, fontSize: 15, bold: true, color: C.txt });
+    T(s, t, { x: 8.3, y: y + 0.32, w: 4.4, h: 0.5, fontSize: 12, color: "C9DDF2" });
+  });
+  ghost(s, "voisin.png", "!!voisin", -8.5, -3.6, 6.5, -20);
+  ghost(s, "pfalz.png", "!!pfalz", 14.6, -3.4, 5.2, -16);
+  T(s, [{ text: "Слабое место — моторы: ", options: { bold: true, color: C.orange } }, { text: "большую часть двигателей закупали за границей.", options: { color: "C9DDF2" } }],
+    { x: 8.3, y: 6.25, w: 4.4, h: 0.6, fontSize: 12 });
+  s.addNotes("Россия дала мировой авиации немало первых. Пётр Нестеров выполнил первую «мёртвую петлю» и первый воздушный таран. Игорь Сикорский построил «Русский витязь», первый в мире четырёхмоторный самолёт, а затем «Илью Муромца», чертёж которого вы видите. Эскадра этих гигантов совершила около 400 вылетов и потеряла в воздушном бою лишь один корабль. Александр Казаков одержал 17 официальных побед, Дмитрий Григорович создал летающие лодки, а Глеб Котельников изобрёл ранцевый парашют. Главной бедой были моторы: большую часть закупали за границей.");
+}
 
-  // 5. Synchroniser
-  {
-    const s = base(5, { panel: [8.3, 0, W - 8.3, H], year: { text: "1915", x: 8.75, y: 0.5, w: 3, size: 30 },
-      title: { text: "Стрельба сквозь винт", x: 0.55, y: 0.4, w: 7.4 }, count: { dark: true } });
-    s.addImage({ data: IMG.sync, x: 8.75, y: 1.3, w: 4.1, h: 3.9 });
-    plane(s, 11.6, 0.35, 1.2, 20);
-    T(s, "Синхронизатор связывает пулемёт с мотором: выстрел происходит только тогда, когда перед стволом нет лопасти.", { x: 8.75, y: 5.4, w: 4.1, h: 1.2, fontSize: 13, color: C.onPanel });
-    const tl = [
-      ["1 апреля 1915", "Ролан Гаррос сбивает первый самолёт, стреляя через винт: стальные клинья на лопастях отражают пули"],
-      ["18 апреля 1915", "Гаррос садится за линией фронта и попадает в плен. Немцы изучают его «Моран-Солнье L»"],
-      ["Лето 1915", "Инженеры Антона Фоккера ставят синхронизатор на моноплан Fokker E.I «Айндеккер»"],
-      ["1 июля 1915", "Курт Винтгенс проводит первый бой с синхронным пулемётом. Начинается «бич Фоккера»"],
-      ["Начало 1916", "Nieuport 11 и Airco DH.2 возвращают союзникам равенство в воздухе"],
-    ];
-    s.addShape(pres.shapes.LINE, { x: 2.3, y: 1.6, w: 0, h: 5.05, line: { color: C.khakiD, width: 1.5 } });
-    tl.forEach(([d, txt], i) => {
-      const y = 1.45 + i * 1.07;
-      T(s, d, { x: 0.55, y: y, w: 1.55, h: 0.6, fontSize: 13, bold: true, color: i === 3 ? C.red : C.olive, align: "right" });
-      s.addShape(pres.shapes.OVAL, { x: 2.21, y: y + 0.07, w: 0.18, h: 0.18, fill: { color: i === 3 ? C.red : C.panel }, line: { color: C.paper, width: 2 } });
-      T(s, txt, { x: 2.6, y: y, w: 5.35, h: 0.95, fontSize: 14 });
-    });
-    s.addNotes("Главная проблема ранних истребителей — винт перед пилотом. Стрелять вперёд значило рисковать отстрелить собственную лопасть. Француз Ролан Гаррос поставил на винт стальные клинья-отражатели и за две недели сбил три самолёта, но 18 апреля 1915 года сел за линией фронта и попал в плен. Вскоре инженеры фирмы Фоккера создали синхронизатор, который разрешал выстрел только в промежутке между лопастями. Монопланы Fokker E на полгода захватили господство в небе — англичане назвали это «бичом Фоккера».");
-  }
+// 9. ACES — leaderboard + Pfalz
+{
+  const s = pres.addSlide();
+  chrome(s, 9, { accent: C.red, kicker: "ГЛАВА 6 · 1915–1918", title: "Асы: рыцари неба или охотники?", titleW: 9 });
+  img(s, "glow_red.png", 7.2, -1.2, 7.0, 7.0, { transparency: 25 });
+  img(s, "pfalz.png", 7.35, 1.35, 5.6, null, { rotate: -6, objectName: "!!pfalz" });
+  const aces = [
+    ["Манфред фон Рихтгофен", 80, C.cen], ["Рене Фонк", 75, C.ent], ["Билли Бишоп", 72, C.ent], ["Эдвард Мэннок", 61, C.ent], ["Жорж Гинемер", 53, C.ent],
+    ["Освальд Бёльке", 40, C.cen], ["Франческо Баракка", 34, C.ent], ["Эдди Рикенбакер", 26, C.ent], ["Александр Казаков", 17, C.gold], ["Макс Иммельман", 15, C.cen],
+  ];
+  const bx = 3.05, bmax = 3.2;
+  aces.forEach(([n, v, col], i) => {
+    const y = 1.72 + i * 0.44;
+    T(s, n, { x: 0.6, y, w: 2.4, h: 0.32, fontSize: 12.5, color: i === 0 ? C.txt : C.txt2, bold: i === 0 || col === C.gold, valign: "middle" });
+    rrect(s, bx, y + 0.06, (bmax * v) / 80, 0.2, col, { rectRadius: 0.05 });
+    T(s, String(v), { x: bx + (bmax * v) / 80 + 0.08, y, w: 0.6, h: 0.32, fontSize: 13, bold: true, color: C.txt, valign: "middle" });
+  });
+  [[C.cen, "Германия"], [C.ent, "Антанта"], [C.gold, "Россия"]].forEach(([c, t], i) => {
+    s.addShape(pres.shapes.OVAL, { x: 0.6 + i * 1.45, y: 6.25, w: 0.13, h: 0.13, fill: { color: c }, line: { color: c, width: 0 } });
+    T(s, t, { x: 0.8 + i * 1.45, y: 6.18, w: 1.2, h: 0.28, fontSize: 10.5, color: C.txt2 });
+  });
+  caption(s, "Официально засчитанные победы; в источниках числа могут отличаться.", 0.6, 6.55, 6, 0.3);
+  caption(s, "Pfalz D.XII в «киношной» раскраске: после войны он снимался в Голливуде, в фильме «Утренний патруль» (1930)", 8.2, 4.35, 4.6, 0.5, { align: "right" });
+  img(s, "trenchart.png", 7.55, 4.95, 1.65);
+  T(s, [{ text: "Лётчики стали кумирами. ", options: { bold: true, color: C.txt } }, { text: "Солдаты делали модели самолётов из металла — «окопное искусство». Этот самолётик сделан во Франции.", options: { color: C.txt2 } },
+    { text: "\n«Заповеди Бёльке» (1916) — первые правила боя: атакуй сверху, со стороны солнца, стреляй в упор.", options: { color: C.txt3 } }],
+    { x: 9.4, y: 5.0, w: 3.45, h: 1.8, fontSize: 11 });
+  s.addNotes("Асом называли лётчика, сбившего не менее пяти самолётов. Самым результативным стал Манфред фон Рихтгофен — «Красный барон», 80 побед. У французов лучшим был Рене Фонк, у британцев Эдвард Мэннок, у американцев Эдди Рикенбакер, а у нас Александр Казаков. Лётчики стали настоящими кумирами: солдаты даже делали модели самолётов из металла — такое «окопное искусство» вы видите на слайде. Освальд Бёльке первым записал правила воздушного боя. А ярко-красный Pfalz на фото после войны снимался в голливудском фильме «Утренний патруль».");
+}
 
-  // 6. Aircraft types
-  {
-    const s = base(6, { panel: [0, 0, 4.0, H], year: { text: "1916–1918", x: 0.5, y: 0.5, w: 3.3, size: 28 },
-      title: { text: "От «этажерки» к истребителю", x: 4.5, y: 0.4, w: 8.4 } });
-    const roles = [
-      ["GiCrosshair", "Истребитель", "завоёвывает господство в воздухе"],
-      ["GiBinoculars", "Разведчик", "двухместный, с фотокамерой и радио"],
-      ["GiFallingBomb", "Бомбардировщик", "от ручных бомб к многомоторным гигантам"],
-      ["GiAnchor", "Гидросамолёт", "морская разведка и охота на подлодки"],
-    ];
-    roles.forEach(([ic, head, body], i) => {
-      const y = 1.4 + i * 1.12;
-      iconDot(s, ic, 0.5, y, 0.7, true);
-      T(s, [{ text: head, options: { bold: true, fontSize: 15, color: C.onPanel, breakLine: true } }, { text: body, options: { fontSize: 12, color: C.khaki } }], { x: 1.35, y: y + 0.02, w: 2.5, h: 0.9 });
-    });
-    plane(s, 1.1, 5.95, 1.5, 12);
-    const hd = (t) => ({ text: t, options: { bold: true, color: C.onPanel, fill: { color: C.panel } } });
-    const rowsData = [
-      ["Nieuport 17", "Франция", "1916", "≈165", "лёгкий «полутораплан», очень манёвренный"],
-      ["Albatros D.III", "Германия", "1917", "≈175", "главная машина «Кровавого апреля»"],
-      ["SPAD S.XIII", "Франция", "1917", "≈210", "быстрый и прочный; летали Фонк и Рикенбакер"],
-      ["Sopwith Camel", "Великобритания", "1917", "≈185", "около 1 300 побед — рекорд союзников"],
-      ["Fokker Dr.I", "Германия", "1917", "≈185", "триплан «Красного барона»"],
-      ["Fokker D.VII", "Германия", "1918", "≈190", "единственный самолёт, названный в тексте перемирия"],
-    ];
-    const rows = [[hd("Самолёт"), hd("Страна"), hd("В строю"), hd("км/ч"), hd("Чем знаменит")]];
-    rowsData.forEach((r, i) => rows.push(r.map((v, j) => ({ text: v, options: { bold: j === 0, fill: { color: i % 2 ? C.paper : C.card } } }))));
-    s.addTable(rows, { x: 4.5, y: 1.35, w: 8.3, colW: [1.7, 1.55, 0.95, 0.75, 3.35], rowH: 0.47, fontFace: BF, fontSize: 12.5, color: C.ink,
-      valign: "middle", margin: [0, 0.08, 0, 0.08], border: { type: "solid", pt: 0.5, color: C.line } });
-    const stats = [["100 → 200+", "км/ч — рост скорости"], ["80 → 200+", "л. с. — мощность мотора"], ["0 → 2", "синхронных пулемёта"]];
-    stats.forEach(([big, small], i) => {
-      const x = 4.5 + i * 2.85;
-      T(s, big, { x, y: 5.0, w: 2.7, h: 0.75, fontFace: HF, fontSize: 30, bold: true, color: C.red });
-      T(s, small, { x, y: 5.75, w: 2.7, h: 0.5, fontSize: 13, color: C.muted });
-    });
-    T(s, "Скорость — максимальная, округлённо; данные разных модификаций различаются.", { x: 4.5, y: 6.45, w: 7, h: 0.3, fontSize: 10, color: C.muted });
-    s.addNotes("За войну сложились основные типы боевых самолётов: истребители, разведчики, бомбардировщики и гидросамолёты. Сравните машины 1914 года, летавшие около 100 километров в час, с истребителями 1918-го — они были вдвое быстрее и несли по два синхронных пулемёта. Albatros стал главным оружием немцев в «Кровавом апреле». Sopwith Camel одержал больше побед, чем любой другой самолёт союзников. А Fokker D.VII так ценился, что условия перемирия отдельно требовали передать союзникам все эти машины.");
-  }
+// 10. BATTLES — Western Front map
+{
+  const s = pres.addSlide();
+  const g = GEO.west1914.pts;
+  const spp = 4.55 / (g.stmihiel[1] - g.nieuport[1]);
+  const P = placeMap(s, "west1914.jpg", "west1914", spp, "arras", [6.75, 1.35 + (g.arras[1] - g.nieuport[1]) * spp], "!!mapw");
+  img(s, "grad_left.png", 0, 0, 6.6, H);
+  img(s, "grad_bottom.png", 0, 6.0, W, 1.5);
+  chrome(s, 10, { accent: C.orange, kicker: "ГЛАВА 7 · 1916–1918", title: "Битвы за небо", titleW: 5 });
+  const pts = [
+    ["arras", "Аррас", "«Кровавый апрель» 1917", "245 : 66", 1, -0.45],
+    ["somme", "Сомма", "июль — ноябрь 1916", "141 день", 1, -0.05],
+    ["verdun", "Верден", "февраль — декабрь 1916", "303 дня", -1, -0.78],
+    ["stmihiel", "Сен-Мийель", "12–15 сентября 1918", "≈1 480", 1, 0.02],
+  ];
+  pts.forEach(([k, n, d, big, side, dy]) => {
+    const [x, y] = P(k);
+    marker(s, x, y, C.orange, 0.16);
+    const lx = side > 0 ? x + 0.3 : x - 2.55;
+    T(s, [{ text: n + "  ", options: { bold: true, fontSize: 15, color: C.txt } }, { text: big, options: { bold: true, fontSize: 15, color: C.orange, breakLine: true } }, { text: d, options: { fontSize: 10.5, color: C.txt2 } }],
+      { x: lx, y: y + dy - 0.2, w: 2.25, h: 0.7, align: side > 0 ? "left" : "right" });
+  });
+  [["paris", "Париж"], ["brussels", "Брюссель"]].forEach(([k, n]) => {
+    const [x, y] = P(k);
+    s.addShape(pres.shapes.OVAL, { x: x - 0.05, y: y - 0.05, w: 0.1, h: 0.1, fill: { color: C.txt }, line: { color: C.txt, width: 0 } });
+    T(s, n, { x: x + 0.1, y: y - 0.12, w: 1.3, h: 0.25, fontSize: 10.5, color: C.txt2 });
+  });
+  const rows = [
+    ["Верден, 1916", "Французы впервые сводят истребители в отдельные группы, чтобы вернуть себе небо."],
+    ["Сомма, 1916", "Британцы наступают и в воздухе; немцы в ответ создают истребительные эскадрильи."],
+    ["Аррас, апрель 1917", "«Кровавый апрель»: британцы теряют 245 самолётов, немцы\u00A0—\u00A066."],
+    ["Сен-Мийель, 1918", "Билли Митчелл собирает почти 1 500 самолётов — крупнейшая авиаоперация войны."],
+  ];
+  rows.forEach(([h, t], i) => {
+    const y = 1.72 + i * 1.02;
+    T(s, h, { x: 0.6, y, w: 4.6, h: 0.3, fontSize: 14, bold: true, color: C.txt });
+    T(s, t, { x: 0.6, y: y + 0.32, w: 4.4, h: 0.6, fontSize: 11.5, color: C.txt2 });
+  });
+  T(s, "«Роз, очистите мне небо! Я ослеп!»", { x: 0.6, y: 5.95, w: 4.6, h: 0.45, fontFace: SERIF, italic: true, fontSize: 17, color: C.orange });
+  caption(s, "Генерал Петен — командиру истребителей де Розу, Верден, 1916", 0.6, 6.42, 4.6, 0.3);
+  ghost(s, "pfalz.png", "!!pfalz", 14.8, 2.4, 5.6, -6);
+  ghost(s, "n9h.png", "!!n9h", -5.5, 8.4, 3.9, -12);
+  s.addShape(pres.shapes.LINE, { x: 9.35, y: 6.82, w: 0.45, h: 0, line: { color: "FF6B5E", width: 2.25 } });
+  T(s, "линия Западного фронта 1915–1917 (упрощённо)", { x: 9.9, y: 6.7, w: 3.0, h: 0.25, fontSize: 10, color: C.txt2 });
+  s.addNotes("Карта показывает Западный фронт: красная линия — окопы, которые почти не двигались с 1915 по 1917 год. Под Верденом в 1916 году впервые развернулась настоящая борьба за господство в воздухе, и французы собрали истребители в отдельные группы. На Сомме британцы наступали и в небе, а немцы ответили истребительными эскадрильями. В апреле 1917 года под Аррасом британцы потеряли 245 самолётов против 66 немецких. А в сентябре 1918-го при Сен-Мийеле американец Билли Митчелл собрал почти полторы тысячи машин — крупнейшую авиаоперацию войны.");
+}
 
-  // 7. Strategic bombing
-  {
-    const s = base(7, { panel: [8.9, 0, W - 8.9, H], year: { text: "1915–1918", x: 9.3, y: 0.5, w: 3.6, size: 28 },
-      title: { text: "Война приходит в города", x: 0.55, y: 0.4, w: 8.0 }, count: { dark: true } });
-    s.addImage({ data: ICON.GiZeppelin, x: 9.6, y: 1.05, w: 2.9, h: 2.9 });
-    plane(s, 11.7, 3.55, 1.1, 250);
-    T(s, [
-      { text: "557", options: { fontFace: HF, fontSize: 44, bold: true, color: C.khaki, breakLine: true } },
-      { text: "погибших от налётов цеппелинов на Британию", options: { fontSize: 13, color: C.onPanel, breakLine: true } },
-      { text: "162", options: { fontFace: HF, fontSize: 44, bold: true, color: C.khaki, paraSpaceBefore: 10, breakLine: true } },
-      { text: "погибших за один налёт «Гот» на Лондон — самый кровавый в войне", options: { fontSize: 13, color: C.onPanel } },
-    ], { x: 9.3, y: 3.95, w: 3.6, h: 3.0 });
-    const cards = [
-      ["GiZeppelin", "Цеппелины", "С января 1915 г. дирижабли бомбят Англию по ночам. Сбивать их научились лишь в 1916 г., когда появились зажигательные пули."],
-      ["GiBomber", "Бомбардировщики «Гота»", "13 июня 1917 г. — дневной налёт на Лондон. Среди погибших — 18 детей в школе на Аппер-Норт-стрит."],
-      ["GiAntiAircraftGun", "Рождение ПВО", "Прожекторы, зенитки, аэростатные заграждения и ночные истребители. Доклад Я. Смэтса (1917) ведёт к созданию RAF."],
-      ["GiBiplane", "«Илья Муромец»", "Эскадра воздушных кораблей: около 400 боевых вылетов и 65 т бомб. В воздушном бою потерян лишь один корабль."],
-    ];
-    cards.forEach(([ic, head, body], i) => {
-      const x = 0.55 + (i % 2) * 4.05, y = 1.45 + Math.floor(i / 2) * 2.75;
-      card(s, x, y, 3.85, 2.55);
-      iconDot(s, ic, x + 0.25, y + 0.25, 0.65);
-      T(s, head, { x: x + 1.05, y: y + 0.3, w: 2.65, h: 0.6, fontSize: 15, bold: true, valign: "middle" });
-      T(s, body, { x: x + 0.25, y: y + 1.05, w: 3.4, h: 1.4, fontSize: 13 });
-    });
-    s.addNotes("Впервые война пришла к мирным жителям с неба. С 1915 года германские цеппелины бомбили Англию. Долгое время их почти не удавалось сбить, пока не появились зажигательные пули: в сентябре 1916 года Уильям Лиф Робинсон сбил первый дирижабль над Британией. В 1917 году их сменили бомбардировщики «Гота». Налёт 13 июня унёс 162 жизни. В России Игорь Сикорский создал «Илью Муромца» — первый серийный четырёхмоторный бомбардировщик. Его эскадра за войну потеряла в воздушном бою лишь один корабль.");
-  }
+// 11. NAVAL — pan the same map to the North Sea (Morph)
+{
+  const s = pres.addSlide();
+  const g = GEO.west1914.pts;
+  const spp = 0.0036;
+  const P = placeMap(s, "west1914.jpg", "west1914", spp, "london", [6.6, 5.4], "!!mapw");
+  img(s, "grad_left.png", 0, 0, 7.2, H);
+  img(s, "grad_bottom.png", 0, 6.0, W, 1.5);
+  chrome(s, 11, { accent: C.teal, kicker: "ГЛАВА 8 · НА МОРЕ", title: "Крылья над морем", titleW: 5.5 });
+  const mk = [
+    ["tondern", "Тондерн", "19.07.1918", -1],
+    ["cuxhaven", "Куксхафен", "25.12.1914", -1],
+    ["london", "Лондон", "цель цеппелинов и «Гот»", 1],
+  ];
+  mk.forEach(([k, n, d, side]) => {
+    const [x, y] = P(k);
+    marker(s, x, y, C.teal, 0.15);
+    T(s, [{ text: n, options: { bold: true, fontSize: 14, color: C.txt, breakLine: true } }, { text: d, options: { fontSize: 10.5, color: C.txt2 } }],
+      { x: side > 0 ? x + 0.28 : x - 2.1, y: y - 0.25, w: 1.85, h: 0.6, align: side > 0 ? "left" : "right" });
+  });
+  img(s, "n9h.png", 7.25, 2.55, 3.9, null, { rotate: -4, objectName: "!!n9h" });
+  ghost(s, "suit.png", "!!suit", 8.55, 8.4, 5.3 / ratio("suit.png"));
+  ghost(s, "helmet.png", "!!helmet", 11.2, 8.6, 1.35);
+  ghost(s, "mask.png", "!!mask", 11.05, 9.0, 1.6);
+  ghost(s, "goggles.png", "!!goggles", 11.0, 9.4, 1.75);
+  caption(s, "Curtiss N-9H — учебный гидроплан ВМС США: на нём подготовили 2 500 морских лётчиков", 7.3, 4.2, 3.9, 0.45, { color: C.txt2 });
+  const tl = [
+    ["25.12.1914", "Куксхафенский рейд: британские гидросамолёты с кораблей атакуют базу цеппелинов"],
+    ["12.08.1915", "Дарданеллы: гидросамолёт Short 184 впервые атакует судно торпедой"],
+    ["1916", "Гидрокрейсера Черноморского флота наносят удары по побережью Турции"],
+    ["17.09.1916", "Ян Нагурский делает «мёртвую петлю» на летающей лодке М‑9"],
+    ["19.07.1918", "Семь Sopwith Camel взлетают с HMS Furious и сжигают цеппелины L 54 и L 60"],
+  ];
+  tl.forEach(([d, t], i) => {
+    const y = 1.68 + i * 1.02;
+    T(s, d, { x: 0.6, y, w: 1.4, h: 0.3, fontSize: 12.5, bold: true, color: C.teal });
+    T(s, t, { x: 2.05, y, w: 3.7, h: 0.95, fontSize: 12, color: C.txt2 });
+  });
+  s.addNotes("Карта смещается на север, к Северному морю. Уже в декабре 1914 года британские гидросамолёты атаковали базу цеппелинов у Куксхафена. В 1915 году в Дарданеллах гидросамолёт впервые применил торпеду. На Чёрном море действовали русские гидрокрейсера, а лётчик Нагурский выполнил «мёртвую петлю» на летающей лодке Григоровича М-9. В июле 1918 года семь истребителей Camel взлетели с авианосца Furious и уничтожили два цеппелина в Тондерне. На фото — Curtiss N-9H, на котором подготовили 2 500 лётчиков ВМС США.");
+}
 
-  // 8. Russian aviation
-  {
-    const s = base(8, { panel: [0, 0, 5.0, H], year: { text: "1913–1917", x: 0.5, y: 0.5, w: 4, size: 28 } });
-    T(s, "Россия: крылья империи", { x: 5.45, y: 0.4, w: 7.4, h: 0.8, fontFace: HF, fontSize: 32, bold: true, valign: "middle", objectName: "!!title" });
-    s.addImage({ data: IMG.muromets, x: 0.45, y: 1.45, w: 4.1, h: 2.46 });
-    T(s, [
-      { text: "«Илья Муромец» И. И. Сикорского", options: { fontFace: HF, fontSize: 17, bold: true, color: C.onPanel, breakLine: true } },
-      { text: "Первый полёт — декабрь 1913 г. Летом 1914 г. совершил перелёт Петербург — Киев и обратно. В войну стал первым серийным четырёхмоторным бомбардировщиком.", options: { fontSize: 13, color: C.khaki, paraSpaceBefore: 6 } },
-    ], { x: 0.5, y: 4.2, w: 4.1, h: 2.0 });
-    plane(s, 3.55, 6.1, 1.0, 40);
-    const cards = [
-      ["Пётр Нестеров", "«Мёртвая петля» (1913) и первый в истории воздушный таран (1914)."],
-      ["Игорь Сикорский", "«Русский витязь» и «Илья Муромец» — начало тяжёлой авиации в мире."],
-      ["Александр Казаков", "Лучший ас России: 17 официальных побед. В 1915 г. протаранил врага и уцелел."],
-      ["Дмитрий Григорович", "Летающие лодки М‑5 и М‑9. В 1916 г. Я. Нагурский выполнил на М‑9 первую «петлю» на гидросамолёте."],
-      ["Глеб Котельников", "Изобрёл ранцевый парашют РК-1 (1911) — прообраз всех современных парашютов."],
-      ["Слабое место — моторы", "Большую часть двигателей закупали за границей: заводы не успевали за нуждами фронта."],
-    ];
-    cards.forEach(([head, body], i) => {
-      const x = 5.45 + (i % 3) * 2.5, y = 1.45 + Math.floor(i / 3) * 2.7;
-      const warn = i === 5;
-      card(s, x, y, 2.35, 2.5, warn ? "E6CFC5" : C.card);
-      T(s, head, { x: x + 0.18, y: y + 0.18, w: 2.0, h: 0.7, fontSize: 15, bold: true, color: warn ? C.red : C.ink, fontFace: HF });
-      T(s, body, { x: x + 0.18, y: y + 0.95, w: 2.0, h: 1.5, fontSize: 12.5 });
-    });
-    s.addNotes("Россия дала мировой авиации немало «первых». Пётр Нестеров выполнил первую «мёртвую петлю» и первый таран. Игорь Сикорский построил гигантов «Русский витязь» и «Илья Муромец». Александр Казаков одержал 17 официальных побед и стал лучшим русским асом. Летающие лодки Григоровича воевали на Балтике и Чёрном море, а Глеб Котельников ещё в 1911 году изобрёл ранцевый парашют. Главной бедой была слабая промышленность: большую часть моторов приходилось покупать у союзников.");
-  }
+// 12. PILOT'S LIFE — flight gear callouts
+{
+  const s = pres.addSlide();
+  chrome(s, 12, { accent: C.orange, kicker: "ГЛАВА 9 · ЛЮДИ", title: "Жизнь на высоте 5 000 метров", titleW: 9 });
+  img(s, "glow_amber.png", 7.0, -0.2, 6.6, 6.6, { transparency: 35 });
+  img(s, "suit.png", 8.55, 1.55, null, 5.3, { w: 5.3 / ratio("suit.png"), objectName: "!!suit" });
+  img(s, "helmet.png", 11.2, 1.45, 1.35, null, { objectName: "!!helmet" });
+  img(s, "mask.png", 11.05, 3.2, 1.6, null, { objectName: "!!mask" });
+  img(s, "goggles.png", 11.0, 4.85, 1.75, null, { objectName: "!!goggles" });
+  ghost(s, "n9h.png", "!!n9h", 14.6, 0.6, 3.9, -4);
+  ghost(s, "liberty.png", "!!engine", 14.4, 1.15, 5.2);
+  img(s, "vaporizer.png", 7.2, 3.55, 0.9);
+  const call = (x, y, w, head, text, align = "left") => T(s, [{ text: head, options: { bold: true, color: C.txt, breakLine: true } }, { text, options: { color: C.txt2 } }], { x, y, w, h: 1.0, fontSize: 10.5, align });
+  call(5.45, 1.75, 2.9, "Кожаный комбинезон", "Надевали поверх тёплой одежды: в открытой кабине — мороз и ветер", "right");
+  call(5.45, 3.55, 1.65, "Жидкий кислород", "Испаритель немецкого экипажа", "right");
+  call(10.95, 5.85, 1.95, "Маска, шлем, очки", "от ветра, масла и мороза до\u00A0−20\u00A0°C", "left");
+  T(s, [{ text: "Без парашюта. ", options: { bold: true, color: C.orange } },
+    { text: "Лётчикам Антанты парашюты так и не выдали — их имели только наблюдатели на аэростатах. Немцы получили парашюты Хайнеке лишь в 1918 г.", options: { color: C.txt2 } }],
+    { x: 0.6, y: 1.7, w: 4.6, h: 1.35, fontSize: 13 });
+  T(s, [{ text: "Опасна была и учёба. ", options: { bold: true, color: C.orange } },
+    { text: "На Sopwith Camel почти столько же лётчиков погибло в авариях, сколько в боях.", options: { color: C.txt2 } }],
+    { x: 0.6, y: 3.15, w: 4.6, h: 0.9, fontSize: 13 });
+  cover(s, "art_balloons.jpg", 0.6, 4.2, 2.75, 2.35);
+  caption(s, "Дж. Хардинг, 1918: наблюдатели прыгают с парашютами из горящих аэростатов", 3.5, 5.5, 1.9, 1.0);
+  caption(s, "Снаряжение американского лётчика Э. Гарднера, 1918–1919 (Национальный почтовый музей США). Такое же носили и военные лётчики", 5.45, 6.45, 2.95, 0.6, { fontSize: 8.5, align: "right" });
+  s.addNotes("Романтика неба скрывала тяжёлую жизнь. Кабины были открытыми, и на высоте лётчиков сковывал мороз, поэтому они носили кожаные комбинезоны, маски и очки — на слайде настоящее снаряжение американского лётчика 1918 года. Выше четырёх-пяти километров не хватало воздуха, и немецкие экипажи брали с собой жидкий кислород. Лётчики Антанты воевали без парашютов, их имели только наблюдатели на аэростатах, как на рисунке военного художника. Опасной была даже учёба: на Camel почти столько же лётчиков погибло в авариях, сколько в боях.");
+}
 
-  // 9. Aces
-  {
-    const s = base(9, { panel: [9.0, 0, W - 9.0, H], year: { text: "1915–1918", x: 9.4, y: 0.5, w: 3.5, size: 28 },
-      title: { text: "Асы: рыцари или охотники?", x: 0.55, y: 0.4, w: 8.2 }, count: { dark: true } });
-    s.addImage({ data: IMG.tri, x: 9.4, y: 1.35, w: 3.55, h: 1.94 });
-    plane(s, 11.85, 0.4, 1.0, 60);
-    T(s, [
-      { text: "80", options: { fontFace: HF, fontSize: 66, bold: true, color: C.khaki, breakLine: true } },
-      { text: "побед Манфреда фон Рихтгофена, «Красного барона», — лучший результат войны. Погиб 21 апреля 1918 г.", options: { fontSize: 14, color: C.onPanel } },
-    ], { x: 9.4, y: 3.5, w: 3.5, h: 2.6 });
-    const hd = (t) => ({ text: t, options: { bold: true, color: C.onPanel, fill: { color: C.panel } } });
-    const aces = [
-      ["Манфред фон Рихтгофен", "Германия", "80", "погиб в 1918"],
-      ["Рене Фонк", "Франция", "75", "пережил войну"],
-      ["Билли Бишоп", "Канада", "72", "пережил войну"],
-      ["Эдвард Мэннок", "Великобритания", "61", "погиб в 1918"],
-      ["Жорж Гинемер", "Франция", "53", "пропал в 1917"],
-      ["Освальд Бёльке", "Германия", "40", "погиб в 1916"],
-      ["Франческо Баракка", "Италия", "34", "погиб в 1918"],
-      ["Эдди Рикенбакер", "США", "26", "пережил войну"],
-      ["Александр Казаков", "Россия", "17", "погиб в 1919"],
-      ["Макс Иммельман", "Германия", "15", "погиб в 1916"],
-    ];
-    const rows = [[hd("Ас"), hd("Страна"), hd("Побед*"), hd("Судьба")]];
-    aces.forEach((r, i) => rows.push(r.map((v, j) => ({ text: v, options: { bold: j === 0 || j === 2, color: j === 2 ? C.red : C.ink, align: j === 2 ? "center" : "left", fill: { color: i % 2 ? C.paper : C.card } } }))));
-    s.addTable(rows, { x: 0.55, y: 1.35, w: 8.0, colW: [3.0, 2.0, 1.0, 2.0], rowH: 0.37, fontFace: BF, fontSize: 12.5, color: C.ink,
-      valign: "middle", margin: [0, 0.1, 0, 0.1], border: { type: "solid", pt: 0.5, color: C.line } });
-    card(s, 0.55, 5.6, 8.0, 1.2);
-    T(s, [
-      { text: "«Заповеди Бёльке» (1916) — ", options: { bold: true } },
-      { text: "первые правила воздушного боя: добейся преимущества до атаки, заходи со стороны солнца, открывай огонь только с близкой дистанции.", options: {} },
-    ], { x: 0.75, y: 5.7, w: 7.6, h: 0.75, fontSize: 13 });
-    T(s, "* Официально засчитанные победы; в разных источниках числа могут отличаться.", { x: 0.75, y: 6.45, w: 7.6, h: 0.3, fontSize: 10, color: C.muted });
-    s.addNotes("Асом называли лётчика, сбившего не менее пяти самолётов противника. Самым результативным стал Манфред фон Рихтгофен — 80 побед. Он летал на ярко-красных машинах, за что его прозвали «Красным бароном». У французов лучшим был Рене Фонк, у британцев — Эдвард Мэннок, у американцев — Эдди Рикенбакер, у нас — Александр Казаков. Интересный факт: гарцующий конь с самолёта итальянского аса Франческо Баракки позже стал эмблемой Ferrari. Освальд Бёльке первым сформулировал правила воздушного боя.");
-  }
+// 13. RESULTS — light slide with the Liberty engine
+{
+  const s = pres.addSlide();
+  chrome(s, 13, { accent: C.goldDark, kicker: "ИТОГИ · 1914 → 1918", title: "Итоги: взрывной рост", light: true, titleW: 7 });
+  img(s, "liberty.png", 7.55, 1.15, 5.2, null, { objectName: "!!engine" });
+  ghost(s, "suit.png", "!!suit", 8.55, 8.4, 5.3 / ratio("suit.png"));
+  ghost(s, "helmet.png", "!!helmet", 11.2, 8.6, 1.35);
+  ghost(s, "mask.png", "!!mask", 11.05, 9.0, 1.6);
+  ghost(s, "goggles.png", "!!goggles", 11.0, 9.4, 1.75);
+  ghost(s, "stamp.png", "!!stamp", 13.9, -4.2, 2.9, 48);
+  T(s, [{ text: "Мотор Liberty V‑12 (США). ", options: { bold: true, color: C.ltxt } }, { text: "Автозаводы Ford, Packard, Buick и другие выпустили 20 748 таких моторов ещё до перемирия.", options: { color: C.ltxt2 } }],
+    { x: 7.75, y: 5.75, w: 4.9, h: 0.8, fontSize: 11.5 });
+  T(s, "≈670", { x: 0.6, y: 1.65, w: 2.6, h: 0.95, fontSize: 56, bold: true, charSpacing: -1, color: C.ltxt });
+  T(s, "самолётов первой линии у четырёх держав в августе 1914", { x: 0.6, y: 2.6, w: 2.6, h: 0.7, fontSize: 11.5, color: C.ltxt2 });
+  T(s, "→", { x: 3.05, y: 1.8, w: 0.6, h: 0.7, fontSize: 36, color: C.ltxt3, align: "center" });
+  T(s, "22 647", { x: 3.7, y: 1.65, w: 3.4, h: 0.95, fontSize: 56, bold: true, charSpacing: -1, color: C.goldDark });
+  T(s, "самолётов только в британских ВВС к 11 ноября 1918", { x: 3.7, y: 2.6, w: 3.2, h: 0.7, fontSize: 11.5, color: C.ltxt2 });
+  // production ranges
+  T(s, "Выпуск самолётов за войну, тыс.", { x: 0.6, y: 3.55, w: 6, h: 0.35, fontSize: 14, bold: true, color: C.ltxt });
+  const x0 = 2.0, sc = 4.0 / 70;
+  [0, 20, 40, 60].forEach((v) => {
+    s.addShape(pres.shapes.LINE, { x: x0 + v * sc, y: 4.05, w: 0, h: 1.55, line: { color: C.lline, width: 0.75 } });
+    T(s, String(v), { x: x0 + v * sc - 0.3, y: 5.62, w: 0.6, h: 0.25, fontSize: 10, color: C.ltxt3, align: "center" });
+  });
+  [["Франция", 52, 68, "52–68"], ["Британия", 33, 55, "33–55"], ["Германия", 48, 48, "≈48"]].forEach(([n, lo, hi, l], i) => {
+    const y = 4.12 + i * 0.5;
+    T(s, n, { x: 0.6, y, w: 1.3, h: 0.36, fontSize: 12.5, bold: true, color: C.ltxt, valign: "middle" });
+    rect(s, x0, y + 0.06, lo * sc, 0.24, C.goldDark);
+    if (hi > lo) rect(s, x0 + lo * sc, y + 0.06, (hi - lo) * sc, 0.24, "E6C77E");
+    T(s, l, { x: x0 + hi * sc + 0.08, y, w: 0.8, h: 0.36, fontSize: 12, bold: true, color: C.ltxt, valign: "middle" });
+  });
+  caption(s, "Тёмная часть — минимальная оценка, светлая — разброс: источники по-разному считают учебные машины.", 0.6, 5.9, 6.3, 0.35, { color: C.ltxt3 });
+  T(s, [{ text: "150 000+ ", options: { bold: true, color: C.goldDark, fontSize: 20 } }, { text: "самолётов построено за войну. 1 апреля 1918 г. созданы Королевские ВВС (RAF) — первые в мире самостоятельные военно-воздушные силы.", options: { color: C.ltxt2, fontSize: 12 } }],
+    { x: 0.6, y: 6.28, w: 6.6, h: 0.75 });
+  s.addNotes("Цифры показывают, насколько стремительным был рост. В 1914 году у четырёх крупнейших держав было около 670 самолётов первой линии. К концу войны только в британских ВВС насчитывалось 22 647 машин. Всего было построено больше 150 тысяч самолётов, а точные цифры по странам в источниках расходятся, поэтому я показываю разброс. Авиация стала отраслью промышленности: американские автозаводы Ford, Packard и Buick выпустили больше двадцати тысяч моторов Liberty. А 1 апреля 1918 года появились британские Королевские ВВС — первые самостоятельные военно-воздушные силы в мире.");
+}
 
-  // 10. Air battles
-  {
-    const s = base(10, { panel: [0, 0, 4.3, H], year: { text: "1916–1918", x: 0.5, y: 0.5, w: 3.6, size: 28 },
-      title: { text: "Битвы за господство в воздухе", x: 4.8, y: 0.4, w: 8.0 } });
-    T(s, [
-      { text: "«Роз, очистите мне небо! Я ослеп!»", options: { fontFace: HF, fontSize: 22, italic: true, color: C.onPanel, breakLine: true } },
-      { text: "Генерал Ф. Петен — командиру истребителей Ш. де Розу. Верден, 1916 г.", options: { fontSize: 13, color: C.khaki, paraSpaceBefore: 10 } },
-    ], { x: 0.5, y: 1.5, w: 3.4, h: 2.6 });
-    plane(s, 1.2, 4.6, 2.0, -20);
-    const rows = [
-      ["Верден", "февр. — дек. 1916", "Французы впервые сводят истребители в отдельные группы, чтобы вернуть себе небо над полем боя.", "303 дня"],
-      ["Сомма", "июль — нояб. 1916", "Британцы ведут «непрерывное наступление» в воздухе; немцы отвечают истребительными эскадрильями — Jasta.", "141 день"],
-      ["«Кровавый апрель»", "апрель 1917, Аррас", "Британцы теряют 245 самолётов, немцы — 66: сказывается превосходство «Альбатросов».", "245 : 66"],
-      ["Сен-Мийель", "12–15 сент. 1918", "Билли Митчелл командует почти 1 500 самолётами союзников — крупнейшая авиаоперация войны.", "≈1 480"],
-    ];
-    rows.forEach(([name, date, body, big], i) => {
-      const y = 1.4 + i * 1.38;
-      card(s, 4.8, y, 8.0, 1.22);
-      T(s, [{ text: name, options: { bold: true, fontSize: 15, fontFace: HF, breakLine: true } }, { text: date, options: { fontSize: 12, color: C.muted } }], { x: 5.0, y: y + 0.18, w: 2.0, h: 0.95 });
-      T(s, body, { x: 7.1, y: y + 0.15, w: 3.75, h: 0.95, fontSize: 13, valign: "middle" });
-      T(s, big, { x: 10.9, y: y + 0.15, w: 1.75, h: 0.95, fontFace: HF, fontSize: 24, bold: true, color: C.red, align: "right", valign: "middle" });
-    });
-    s.addNotes("В 1916 году под Верденом впервые развернулась настоящая борьба за господство в воздухе. Командующий Петен потребовал от майора де Роза «очистить небо», и французы собрали лучших лётчиков в специальные истребительные группы. На Сомме британцы действовали наступательно, а немцы в ответ создали истребительные эскадрильи. В апреле 1917 года под Аррасом британцы потеряли 245 самолётов против 66 немецких. А в сентябре 1918-го при Сен-Мийеле американец Билли Митчелл впервые собрал в одной операции почти полторы тысячи самолётов.");
-  }
+// 14. LEGACY — Inverted Jenny
+{
+  const s = pres.addSlide();
+  chrome(s, 14, { accent: C.teal, kicker: "ФИНАЛ · ПОСЛЕ 1918", title: "Наследие: небо после войны", titleW: 8 });
+  img(s, "glow_blue.png", 7.7, -0.5, 6.2, 6.2, { transparency: 20 });
+  img(s, "stamp.png", 9.15, 1.2, 2.9, null, { rotate: 6, objectName: "!!stamp" });
+  ghost(s, "liberty.png", "!!engine", -6.2, 1.15, 5.2);
+  T(s, [{ text: "«Перевёрнутая Дженни», 1918. ", options: { bold: true, color: C.txt } }, { text: "Марку выпустили к открытию авиапочты США 15 мая 1918 г. Лист из 100 марок с перевёрнутым самолётом — знаменитая ошибка печати.", options: { color: C.txt2 } }],
+    { x: 8.65, y: 4.35, w: 4.1, h: 1.2, fontSize: 11 });
+  const items = [
+    ["1919", "Версальский договор (ст. 198) запрещает Германии военную авиацию"],
+    ["14–15 июня 1919", "Алкок и Браун впервые без посадки перелетают Атлантику на бомбардировщике Vickers Vimy"],
+    ["25 августа 1919", "Открывается регулярная международная авиалиния Лондон — Париж"],
+    ["1921", "Джулио Дуэ пишет «Господство в воздухе»: войну решает авиация"],
+  ];
+  items.forEach(([d, t], i) => {
+    const x = 0.6 + (i % 2) * 3.85, y = 1.7 + Math.floor(i / 2) * 1.45;
+    T(s, d, { x, y, w: 3.6, h: 0.3, fontSize: 13, bold: true, color: C.teal });
+    T(s, t, { x, y: y + 0.33, w: 3.5, h: 0.95, fontSize: 12, color: C.txt2 });
+  });
+  T(s, "За четыре года самолёт прошёл путь от «спорта» до самостоятельного рода войск — и навсегда изменил войны XX века.", { x: 0.6, y: 4.6, w: 7.6, h: 1.2, fontFace: SERIF, italic: true, fontSize: 22, color: C.txt });
+  T(s, "Источники: Национальный музей авиации и космонавтики США (описания экспонатов); Imperial War Museums; J. H. Morrow, «The Great War in the Air» (1993); C. Shores, N. Franks, R. Guest, «Above the Trenches» (1990); М. А. Хайрулин, «Илья Муромец. Гордость русской авиации» (2010).\nФото и рисунки: Smithsonian Open Access (CC0). Карты: Natural Earth; A. Ourednik, historical-basemaps.",
+    { x: 0.6, y: 5.95, w: 12.1, h: 0.95, fontSize: 9, color: C.txt3 });
+  s.addNotes("Первая мировая война определила будущее авиации. Версальский договор запретил Германии военную авиацию, настолько её стали опасаться. Военные технологии быстро пришли в мирную жизнь: уже в 1919 году Алкок и Браун на бывшем бомбардировщике перелетели Атлантику, открылась авиалиния Лондон — Париж, а в США с мая 1918 года летала авиапочта. Марка «Перевёрнутая Дженни» напечатана к её открытию и стала самой знаменитой ошибкой в истории филателии. Вывод: за четыре года авиация превратилась из забавы в силу, изменившую войны XX века. Спасибо за внимание!");
+}
 
-  // 11. Naval aviation
-  {
-    const s = base(11, { panel: [8.4, 0, W - 8.4, H], year: { text: "1914–1918", x: 8.85, y: 0.5, w: 4, size: 28 },
-      title: { text: "Крылья над морем", x: 0.55, y: 0.4, w: 7.5 }, count: { dark: true } });
-    s.addImage({ data: IMG.carrier, x: 8.8, y: 1.45, w: 4.1, h: 2.14 });
-    plane(s, 11.85, 0.35, 1.0, 100);
-    T(s, [
-      { text: "19.07.1918", options: { fontFace: HF, fontSize: 34, bold: true, color: C.khaki, breakLine: true } },
-      { text: "Рейд на Тондерн: семь Sopwith Camel взлетают с HMS Furious и сжигают цеппелины L 54 и L 60. Первый удар колёсных самолётов с авианосца.", options: { fontSize: 14, color: C.onPanel, paraSpaceBefore: 6 } },
-    ], { x: 8.85, y: 4.0, w: 4.0, h: 2.8 });
-    const tl = [
-      ["25.12.1914", "Куксхафенский рейд: британские гидросамолёты с кораблей атакуют базу цеппелинов"],
-      ["12.08.1915", "Дарданеллы: гидросамолёт Short 184 впервые атакует судно торпедой"],
-      ["1916", "Гидрокрейсера Черноморского флота «Император Николай I» и «Император Александр I» наносят удары по побережью Турции"],
-      ["17.09.1916", "Ян Нагурский выполняет «мёртвую петлю» на летающей лодке М‑9"],
-      ["02.08.1917", "Эдвин Даннинг впервые сажает самолёт на идущий корабль — HMS Furious"],
-    ];
-    s.addShape(pres.shapes.LINE, { x: 2.15, y: 1.55, w: 0, h: 5.1, line: { color: C.khakiD, width: 1.5 } });
-    tl.forEach(([d, txt], i) => {
-      const y = 1.4 + i * 1.08;
-      T(s, d, { x: 0.55, y, w: 1.4, h: 0.5, fontSize: 13, bold: true, color: C.olive, align: "right" });
-      s.addShape(pres.shapes.OVAL, { x: 2.06, y: y + 0.07, w: 0.18, h: 0.18, fill: { color: C.panel }, line: { color: C.paper, width: 2 } });
-      T(s, txt, { x: 2.45, y, w: 5.6, h: 1.0, fontSize: 14 });
-    });
-    s.addNotes("Самолёт быстро пришёл и на флот. Уже в декабре 1914 года британские гидросамолёты атаковали базу цеппелинов в Куксхафене. В 1915 году гидросамолёт впервые применил торпеду. На Чёрном море действовали русские гидрокрейсера, а летающая лодка Григоровича М‑9 стала одной из лучших в мире: лётчик Нагурский даже выполнил на ней «мёртвую петлю». В 1917 году Эдвин Даннинг впервые посадил самолёт на идущий корабль, а в июле 1918-го с авианосца Furious был нанесён первый удар колёсными самолётами.");
-  }
-
-  // 12. Pilot's life
-  {
-    const s = base(12, { panel: [0, 0, 4.6, H], year: { text: "1914–1918", x: 0.5, y: 0.5, w: 3.8, size: 28 },
-      title: { text: "Жизнь на высоте 5 000 метров", x: 5.1, y: 0.4, w: 7.7 } });
-    s.addImage({ data: ICON.GiParachute, x: 0.5, y: 1.35, w: 1.3, h: 1.3 });
-    plane(s, 2.6, 1.3, 1.5, 150);
-    T(s, [
-      { text: "Без парашюта", options: { fontFace: HF, fontSize: 28, bold: true, color: C.onPanel, breakLine: true } },
-      { text: "Лётчикам Антанты парашюты так и не выдали — их имели лишь наблюдатели на аэростатах. Немецкие пилоты получили парашюты Хайнеке только в 1918 г.", options: { fontSize: 14, color: C.khaki, paraSpaceBefore: 8, breakLine: true } },
-      { text: "29 июня 1918 г. ас Эрнст Удет одним из первых спасся на парашюте из подбитого истребителя.", options: { fontSize: 14, color: C.onPanel, paraSpaceBefore: 8 } },
-    ], { x: 0.5, y: 2.85, w: 3.7, h: 4.0 });
-    const cards = [
-      ["GiThermometerCold", "Холод", "Открытая кабина: на высоте 5–6 км мороз до −25…−30 °C. Меховые комбинезоны и жир на лице от обморожения."],
-      ["GiDrop", "Масло и выхлоп", "Ротативные моторы разбрызгивали касторовое масло прямо в лицо пилоту — отсюда постоянные отравления."],
-      ["GiSteampunkGoggles", "Нехватка кислорода", "Выше 4–5 км — головная боль и замедленная реакция. Кислородные приборы были редкостью."],
-      ["GiBrodieHelmet", "Короткое обучение", "Новичков отправляли на фронт после считанных часов самостоятельного налёта; многие разбивались ещё в учебных полётах."],
-    ];
-    cards.forEach(([ic, head, body], i) => {
-      const x = 5.1 + (i % 2) * 3.9, y = 1.4 + Math.floor(i / 2) * 2.12;
-      card(s, x, y, 3.75, 1.95);
-      iconDot(s, ic, x + 0.2, y + 0.2, 0.6);
-      T(s, head, { x: x + 0.95, y: y + 0.2, w: 2.65, h: 0.6, fontSize: 15, bold: true, valign: "middle" });
-      T(s, body, { x: x + 0.2, y: y + 0.9, w: 3.4, h: 1.0, fontSize: 12.5 });
-    });
-    T(s, [
-      { text: "Рыцарский миф и реальность. ", options: { bold: true, color: C.red } },
-      { text: "22 апреля 1918 г. австралийские лётчики похоронили Рихтгофена с воинскими почестями. Но чаще в небе побеждал тот, кто атаковал внезапно и со спины.", options: {} },
-    ], { x: 5.1, y: 5.8, w: 7.65, h: 1.0, fontSize: 14 });
-    s.addNotes("Романтика неба скрывала тяжёлую реальность. Кабины были открытыми, и на высоте лётчиков сковывал мороз. Ротативные моторы разбрызгивали касторовое масло, выше четырёх-пяти километров не хватало кислорода. Британские и французские лётчики воевали без парашютов: командование опасалось, что пилоты будут покидать машины слишком рано. Немцы получили парашюты лишь в 1918 году. Многие новички погибали в первых же боях. И всё же рыцарские жесты случались: Рихтгофена противники похоронили с воинскими почестями.");
-  }
-
-  // 13. Results
-  {
-    const s = base(13, { panel: [0, 0, 6.0, H], year: { text: "1918", x: 0.55, y: 1.3, w: 3, size: 28 },
-      title: { text: "Итоги в цифрах", x: 0.55, y: 0.4, w: 5.2, dark: true } });
-    T(s, [
-      { text: "≈670", options: { fontFace: HF, fontSize: 44, bold: true, color: C.khaki, breakLine: true } },
-      { text: "самолётов первой линии у четырёх ведущих держав в августе 1914 г.", options: { fontSize: 14, color: C.onPanel, breakLine: true } },
-      { text: "22 647", options: { fontFace: HF, fontSize: 44, bold: true, color: C.khaki, paraSpaceBefore: 14, breakLine: true } },
-      { text: "самолётов было только в британских Королевских ВВС к 11 ноября 1918 г. — крупнейших ВВС мира", options: { fontSize: 14, color: C.onPanel } },
-    ], { x: 0.55, y: 2.0, w: 5.0, h: 3.6 });
-    plane(s, 4.15, 5.2, 1.4, 30);
-    T(s, "1 апреля 1918 г. созданы Королевские ВВС (RAF) — первые в мире самостоятельные военно-воздушные силы.", { x: 0.55, y: 5.85, w: 3.5, h: 1.0, fontSize: 13, color: C.khaki });
-    // range chart
-    T(s, "Выпуск самолётов в 1914–1918 гг., тыс.", { x: 6.5, y: 0.45, w: 6.3, h: 0.6, fontFace: HF, fontSize: 20, bold: true, valign: "middle" });
-    const x0 = 8.2, scale = 4.3 / 70; // 70 thousand = 4.3"
-    [0, 20, 40, 60].forEach((v) => {
-      const x = x0 + v * scale;
-      s.addShape(pres.shapes.LINE, { x, y: 1.35, w: 0, h: 3.15, line: { color: C.line, width: 0.75 } });
-      T(s, String(v), { x: x - 0.3, y: 4.55, w: 0.6, h: 0.3, fontSize: 11, color: C.muted, align: "center" });
-    });
-    const bars = [["Франция", 52, 68, "52–68"], ["Британия", 33, 55, "33–55"], ["Германия", 48, 48, "≈48"]];
-    bars.forEach(([name, lo, hi, label], i) => {
-      const y = 1.55 + i * 0.98;
-      T(s, name, { x: 6.5, y, w: 1.6, h: 0.55, fontSize: 15, bold: true, valign: "middle" });
-      s.addShape(pres.shapes.RECTANGLE, { x: x0, y: y + 0.05, w: lo * scale, h: 0.45, fill: { color: C.olive }, line: { color: C.olive, width: 0 } });
-      if (hi > lo) s.addShape(pres.shapes.RECTANGLE, { x: x0 + lo * scale, y: y + 0.05, w: (hi - lo) * scale, h: 0.45, fill: { color: C.khakiD, transparency: 35 }, line: { color: C.khakiD, width: 0 } });
-      T(s, label, { x: x0 + hi * scale + 0.1, y, w: 0.8, h: 0.55, fontSize: 14, bold: true, color: C.red, valign: "middle" });
-    });
-    T(s, "Тёмная часть — минимальная оценка, светлая — разброс данных: источники по-разному учитывают учебные машины и недостроенные планеры.", { x: 6.5, y: 4.95, w: 6.3, h: 0.6, fontSize: 11, color: C.muted });
-    card(s, 6.5, 5.7, 6.3, 1.15);
-    T(s, "150 000+", { x: 6.7, y: 5.8, w: 2.7, h: 0.95, fontFace: HF, fontSize: 32, bold: true, color: C.red, valign: "middle" });
-    T(s, "самолётов построили воюющие страны за четыре года войны", { x: 9.45, y: 5.8, w: 3.2, h: 0.95, fontSize: 14, valign: "middle" });
-    s.addNotes("Цифры показывают, насколько стремительным был рост. В 1914 году у четырёх крупнейших держав было около 670 боевых самолётов. К концу войны только в британских ВВС их насчитывалось более 22 тысяч. Всего за войну было построено свыше 150 тысяч самолётов; лидировали Франция, Великобритания и Германия. Точные цифры в источниках расходятся, поэтому на диаграмме показан разброс. Главный организационный итог: 1 апреля 1918 года появились Королевские ВВС Великобритании — первые в мире самостоятельные военно-воздушные силы.");
-  }
-
-  // 14. Legacy
-  {
-    const s = base(14, { panel: [0, 0, W, H], year: { text: "после 1918", x: 0.6, y: 1.25, w: 5, size: 26 },
-      title: { text: "Наследие: небо после войны", x: 0.6, y: 0.4, w: 8.5, dark: true }, count: { dark: true } });
-    plane(s, 11.4, 0.3, 1.3, 50);
-    const items = [
-      ["GiOpenBook", "1921", "Джулио Дуэ, «Господство в воздухе»: теория, по которой войну выигрывает авиация"],
-      ["GiScrollUnfurled", "1919", "Версальский договор (ст. 198) запрещает Германии иметь военную авиацию"],
-      ["GiCommercialAirplane", "14–15 июня 1919", "Алкок и Браун без посадки пересекают Атлантику на бомбардировщике Vickers Vimy"],
-      ["GiAirplaneDeparture", "25 августа 1919", "Открывается регулярная международная авиалиния Лондон — Париж"],
-    ];
-    items.forEach(([ic, yr, txt], i) => {
-      const x = 0.6 + (i % 2) * 4.2, y = 2.0 + Math.floor(i / 2) * 1.75;
-      iconDot(s, ic, x, y, 0.7, true);
-      T(s, [{ text: yr, options: { bold: true, fontSize: 15, color: C.khaki, breakLine: true } }, { text: txt, options: { fontSize: 13, color: C.onPanel } }], { x: x + 0.9, y, w: 3.1, h: 1.5 });
-    });
-    T(s, "За четыре года авиация прошла путь от «спорта» и разведки до самостоятельного рода войск и навсегда изменила войны XX века.", {
-      x: 0.6, y: 5.6, w: 8.0, h: 1.2, fontFace: HF, fontSize: 19, italic: true, color: C.onPanel, valign: "middle" });
-    T(s, [
-      { text: "Источники", options: { bold: true, fontSize: 13, color: C.khaki, breakLine: true } },
-      { text: "Morrow J. H. The Great War in the Air: Military Aviation from 1909 to 1921. Washington, 1993.", options: { breakLine: true, paraSpaceBefore: 6 } },
-      { text: "Shores C., Franks N., Guest R. Above the Trenches. London: Grub Street, 1990.", options: { breakLine: true, paraSpaceBefore: 6 } },
-      { text: "Хайрулин М. А. «Илья Муромец»: гордость русской авиации. М.: Яуза; Эксмо, 2010.", options: { breakLine: true, paraSpaceBefore: 6 } },
-      { text: "Imperial War Museums: The Air Raids That Shook Britain (iwm.org.uk).", options: { breakLine: true, paraSpaceBefore: 6 } },
-      { text: "1914-1918-online. International Encyclopedia of the First World War.", options: { paraSpaceBefore: 6 } },
-    ], { x: 9.2, y: 2.0, w: 3.6, h: 4.6, fontSize: 11, color: C.khaki });
-    s.addNotes("Первая мировая война определила будущее авиации. Итальянский генерал Дуэ написал книгу о господстве в воздухе, которая повлияла на всю военную мысль. Версальский договор запретил Германии военную авиацию — настолько её стали опасаться. А военные технологии быстро пришли в мирную жизнь: уже в 1919 году Алкок и Браун на бывшем бомбардировщике пересекли Атлантику, и открылись первые регулярные международные авиалинии. Вывод: за четыре года авиация превратилась из забавы в силу, изменившую войны XX века. Спасибо за внимание!");
-  }
-
-  await pres.writeFile({ fileName: "deck_raw.pptx" });
-  console.log("written");
-})();
+pres.writeFile({ fileName: path.join(__dirname, "deck_raw.pptx") }).then(() => console.log("written"));
