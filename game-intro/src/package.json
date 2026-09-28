@@ -10,7 +10,12 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@fontsource/caveat": "^5.3.0",
     "@fontsource/pixelify-sans": "^5.3.0",
-    "@fontsource/press-start-2p": "^5.3.0"
+    "@fontsource/press-start-2p": "^5.3.0",
+    "@fontsource/pt-mono": "^5.3.0",
+    "@fontsource/rubik-distressed": "^5.3.0",
+    "@fontsource/rubik-wet-paint": "^5.3.0",
+    "@fontsource/ruslan-display": "^5.3.0"
   }
 }
