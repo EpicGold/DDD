@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YARMAK TEAM — заставка «Аркада»</title>
+<style>
+@font-face { font-family: "PS2P"; src: url(data:font/woff2;base64,__PS2P_LATIN__) format("woff2"); unicode-range: U+0000-00FF, U+2000-206F, U+2190-21FF, U+2200-22FF, U+2600-26FF; }
+@font-face { font-family: "PS2P"; src: url(data:font/woff2;base64,__PS2P_CYR__) format("woff2"); unicode-range: U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: "Pixelify"; font-weight: 700; src: url(data:font/woff2;base64,__PIX_LATIN__) format("woff2"); unicode-range: U+0000-00FF, U+2000-206F, U+2200-22FF; }
+@font-face { font-family: "Pixelify"; font-weight: 700; src: url(data:font/woff2;base64,__PIX_CYR__) format("woff2"); unicode-range: U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+body { display: grid; place-items: center; cursor: pointer; }
+canvas { width: 100vw; height: 56.25vw; max-height: 100vh; max-width: 177.78vh; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>
+"use strict";
+/* ============================================================
+   YARMAK TEAM — заставка №2 «Аркада» (Canvas 2D + WebAudio).
+   12 секунд: INSERT COIN → гиперпрыжок → логотип → титульный экран → iris-out.
+   Музыка — чиптюн 140 BPM, синхронизирован с анимацией.
+   ?autoplay=1 — без экрана «нажмите» (без звука); ?capture=1 — запись видео.
+   По окончании: событие "yarmak:intro-end" + postMessage родителю.
+   ============================================================ */
+const W = 1920, H = 1080;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const params = new URLSearchParams(location.search), CAPTURE = params.has("capture");
+
+const BPM = 140, BEAT = 60 / BPM, BAR = BEAT * 4;
+const T = { coin: 0.30, warp: 1.20, drop: 3.50, presents: 4.60, prompt: 6.80, glint0: 5.2, glintEvery: 3.6,
+  videoOutro: 10.40, outroLen: 1.25, videoLen: 12.0 };
+const GREEN = "#39ff6a", LIME = "#a6ff3b", GOLD = "#ffd23f";
+
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const eOut = (k) => 1 - Math.pow(1 - k, 3), eIn = (k) => k * k * k;
+const eBack = (k) => { const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2); };
+function rng(seed) { let s = seed >>> 0; return () => { s = (s + 0x6D2B79F5) >>> 0; let r = Math.imul(s ^ (s >>> 15), 1 | s); r ^= r + Math.imul(r ^ (r >>> 7), 61 | r); return ((r ^ (r >>> 14)) >>> 0) / 4294967296; }; }
+const hash = (n) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+const snap = (v, g = 2) => Math.round(v / g) * g;
+
+// beat helpers (grid starts at the drop; the build-up uses the same grid backwards)
+const beatPos = (t) => (t - T.drop) / BEAT;
+const kickEnv = (t) => { if (t < T.drop - 2 * BEAT) return 0; const b = beatPos(t), ph = b - Math.floor(b); return Math.exp(-ph * BEAT * 9); };
+
+const logo = new Image(); logo.src = "data:image/webp;base64,__LOGO__";
+const LS = 760, LX = W / 2, LY = 470;
+const scene = document.createElement("canvas"); scene.width = W; scene.height = H; const sc = scene.getContext("2d");
+const tmp = document.createElement("canvas"); tmp.width = LS; tmp.height = LS; const tc = tmp.getContext("2d");
+let scan, vign;
+function prepare() {
+  scan = document.createElement("canvas"); scan.width = W; scan.height = H;
+  const q = scan.getContext("2d"); q.fillStyle = "rgba(0,0,0,0.2)"; for (let y = 0; y < H; y += 4) q.fillRect(0, y + 2, W, 2);
+  vign = document.createElement("canvas"); vign.width = W; vign.height = H;
+  const v = vign.getContext("2d"), g = v.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.95);
+  g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,0.8)"); v.fillStyle = g; v.fillRect(0, 0, W, H);
+}
+
+// ---------------- scene 1: INSERT COIN ----------------
+function drawCoin(g, t) {
+  if (t > T.warp + 0.15) return;
+  g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+  const fade = 1 - seg(t, T.warp - 0.15, T.warp + 0.1);
+  g.save(); g.globalAlpha = fade; g.textAlign = "center"; g.textBaseline = "middle";
+  if (t < T.coin) {
+    if (Math.floor(t * 5) % 2 === 0) { g.font = "44px PS2P"; g.fillStyle = LIME; g.fillText("INSERT COIN", W / 2, H / 2); }
+  } else {
+    // spinning pixel coin
+    const k = t - T.coin, w = Math.abs(Math.cos(k * 14)) * 70 + 8, y = H / 2 - 120 - Math.max(0, 60 - k * 400);
+    g.fillStyle = GOLD; g.fillRect(snap(W / 2 - w / 2), snap(y - 40), snap(w), 80);
+    g.fillStyle = "#b8860b"; g.fillRect(snap(W / 2 - w / 2 + w * 0.3), snap(y - 24), snap(Math.max(2, w * 0.4)), 48);
+    const s = 1 + 0.25 * Math.exp(-k * 10);
+    g.font = `${Math.round(44 * s)}px PS2P`; g.fillStyle = "#fff"; g.fillText("CREDIT 01", W / 2, H / 2 + 20);
+    g.font = "22px PS2P"; g.fillStyle = GREEN; if (k > 0.25) g.fillText("PLAYER 1 — READY", W / 2, H / 2 + 100);
+  }
+  g.restore();
+}
+
+// ---------------- scene 2: hyperspace warp ----------------
+const GLYPHS = ["∫", "π", "Σ", "√", "∞", "Δ", "x²", "F=ma", "{ }", "</>", "def", "if", "01", "λ", "±", "="];
+const STARS = (() => { const r = rng(3); return Array.from({ length: 520 }, (_, i) => ({ x: (r() - 0.5) * 2, y: (r() - 0.5) * 2, z: r(), glyph: i % 11 === 0 ? GLYPHS[i % GLYPHS.length] : null, c: [GREEN, "#fff", LIME, "#1fd35a"][i % 4] })); })();
+function warpSpeedIntegral(t) { // distance travelled since the warp began
+  const u = clamp(t - T.warp, 0, 10);
+  return 0.25 * u + 0.28 * u * u * u / 3; // speed = 0.25 + 0.28 u²
+}
+function drawWarp(g, t) {
+  if (t < T.warp - 0.1 || t > T.drop + 1.0) return;
+  const a = seg(t, T.warp - 0.1, T.warp + 0.25) * (1 - seg(t, T.drop, T.drop + 1.0));
+  const cx = W / 2, cy = LY, f = 720;
+  const gr = g.createRadialGradient(cx, cy, 0, cx, cy, 900);
+  gr.addColorStop(0, `rgba(30,120,60,${0.55 * a})`); gr.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = "#000"; g.globalAlpha = a; g.fillRect(0, 0, W, H); g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  const d = warpSpeedIntegral(t), d2 = warpSpeedIntegral(t - 1 / 30), spd = 0.25 + 0.28 * Math.pow(clamp(t - T.warp, 0, 10), 2);
+  // tunnel frames
+  for (let i = 0; i < 12; i++) {
+    const z = 1 - ((d * 0.9 + i / 12) % 1);
+    if (z < 0.04) continue;
+    const s = 380 / z, al = clamp((1 - z) * 1.5) * 0.5 * a;
+    g.strokeStyle = `rgba(57,255,106,${al})`; g.lineWidth = Math.max(2, snap(6 / z / 3));
+    g.strokeRect(snap(cx - s * 1.78), snap(cy - s), snap(s * 3.56), snap(s * 2));
+  }
+  // streaking stars and formula glyphs
+  for (const s of STARS) {
+    const z = 1 - ((s.z + d) % 1), zp = 1 - ((s.z + d2) % 1);
+    if (z < 0.02 || zp < z) continue;
+    const x = cx + (s.x / z) * f * 0.5, y = cy + (s.y / z) * f * 0.5;
+    const xp = cx + (s.x / zp) * f * 0.5, yp = cy + (s.y / zp) * f * 0.5;
+    const al = clamp((1 - z) * 1.6) * a;
+    if (s.glyph) {
+      g.globalAlpha = al * 0.8; g.fillStyle = s.c; g.font = `${Math.round(clamp(18 / z, 12, 120))}px PS2P`;
+      g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(s.glyph, snap(x), snap(y));
+    } else {
+      g.globalAlpha = al; g.strokeStyle = s.c; g.lineWidth = Math.max(2, 5 * (1 - z));
+      const k = Math.min(1, spd * 0.6);
+      g.beginPath(); g.moveTo(snap(lerp(x, xp, 0) ), snap(y)); g.lineTo(snap(lerp(x, xp, k * 3)), snap(lerp(y, yp, k * 3))); g.stroke();
+    }
+  }
+  g.globalAlpha = 1;
+}
+
+// ---------------- scene 3: title backdrop ----------------
+function drawSunburst(g, t, bob) {
+  const k = seg(t, T.drop - 0.05, T.drop + 0.35); if (k <= 0) return;
+  g.save(); g.globalAlpha = k;
+  g.fillStyle = "#020a05"; g.fillRect(0, 0, W, H);
+  const n = 22, rot = t * 0.12, pulse = kickEnv(t);
+  g.translate(LX, LY + bob); g.rotate(rot);
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * Math.PI * 2, a1 = ((i + 0.5) / n) * Math.PI * 2;
+    g.fillStyle = i % 2 ? `rgba(20,90,45,${0.35 + 0.2 * pulse})` : `rgba(8,45,22,${0.45 + 0.15 * pulse})`;
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(Math.cos(a0) * 1500, Math.sin(a0) * 1500); g.lineTo(Math.cos(a1) * 1500, Math.sin(a1) * 1500); g.closePath(); g.fill();
+  }
+  g.restore();
+  const gr = g.createRadialGradient(LX, LY, 80, LX, LY, 720);
+  gr.addColorStop(0, `rgba(57,255,106,${(0.28 + 0.18 * kickEnv(t)) * k})`); gr.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = gr; g.fillRect(0, 0, W, H);
+}
+const MARQUEE = " ★ GAME JAM ★ PYTHON ★ CLAUDE ★ ВАЙБКОДИНГ ★ МАТЕМАТИКА ★ ТЕХЛИЦЕЙ ★ F = ma ★ a² + b² = c²";
+function drawMarquee(g, t) {
+  const k = eOut(seg(t, T.drop + 0.2, T.drop + 0.8)); if (k <= 0) return;
+  g.save(); g.font = "24px PS2P"; g.textBaseline = "middle";
+  const tw = g.measureText(MARQUEE).width;
+  for (const [y, dir, col] of [[-64 + 64 * k, 1, LIME], [H - 64 * k, -1, GREEN]]) {
+    g.fillStyle = "#010703"; g.fillRect(0, y, W, 64);
+    g.fillStyle = col; g.fillRect(0, dir > 0 ? y + 60 : y, W, 4);
+    let off = ((t * 170 * dir) % tw + tw) % tw;
+    g.fillStyle = col;
+    for (let x = -off; x < W; x += tw) g.fillText(MARQUEE, x, y + 33);
+  }
+  g.restore();
+}
+function drawEQ(g, t) {
+  const k = seg(t, T.drop, T.drop + 0.4); if (k <= 0) return;
+  const step = Math.floor(beatPos(t) * 4), kick = kickEnv(t);
+  for (const side of [-1, 1]) for (let i = 0; i < 12; i++) {
+    const x0 = side < 0 ? 70 + i * 40 : W - 70 - 32 - i * 40;
+    const band = i / 11;
+    const e = (1 - band) * kick * 0.9 + (0.25 + 0.55 * hash(step * 13 + i * 7 + (side > 0 ? 3 : 0))) * (0.4 + 0.6 * band) * 0.8;
+    const blocks = Math.max(1, Math.round(clamp(e) * 9 * k));
+    for (let b = 0; b < blocks; b++) {
+      g.fillStyle = b > 6 ? GOLD : b > 4 ? LIME : GREEN;
+      g.fillRect(x0, 1000 - 64 - 10 - b * 18, 32, 14);
+    }
+  }
+}
+const CONF = (() => { const r = rng(21); return Array.from({ length: 150 }, () => ({ x: r() * W, sp: 120 + r() * 220, ph: r(), sz: [6, 8, 10][Math.floor(r() * 3)], sw: r() * 6.28, c: [GREEN, LIME, "#fff", GOLD][Math.floor(r() * 4)] })); })();
+function drawConfetti(g, t) {
+  const dt = t - T.drop; if (dt < 0) return;
+  const k = seg(t, T.drop, T.drop + 0.3);
+  for (const p of CONF) {
+    const y = ((p.ph * (H + 200) + dt * p.sp) % (H + 200)) - 100 - (dt < 1.5 ? (1.5 - dt) * 0 : 0);
+    const x = p.x + Math.sin(dt * 2 + p.sw) * 40;
+    const flip = Math.abs(Math.cos(dt * 5 + p.sw));
+    g.globalAlpha = 0.85 * k; g.fillStyle = p.c;
+    g.fillRect(snap(x), snap(y), p.sz, Math.max(2, snap(p.sz * flip)));
+  }
+  g.globalAlpha = 1;
+}
+
+// ---------------- logo flight + title ----------------
+function logoState(t) {
+  const fly = seg(t, T.drop - 0.55, T.drop);
+  if (fly <= 0) return null;
+  if (t < T.drop) { const k = eIn(fly); return { s: lerp(0.02, 1.0, k), rot: (1 - k) * Math.PI * 2.2, a: clamp(fly * 4) }; }
+  const b = eBack(seg(t, T.drop, T.drop + 0.45));
+  return { s: lerp(1.16, 1.0, b) * (1 + 0.028 * kickEnv(t)), rot: 0, a: 1 };
+}
+function drawLogo(g, t, bob) {
+  const st = logoState(t); if (!st) return;
+  const drawAt = (s, rot, a, target) => {
+    const sz = LS * s; g.save(); g.globalAlpha = a; g.translate(LX, LY + bob); g.rotate(rot);
+    g.drawImage(target, -sz / 2, -sz / 2, sz, sz); g.restore();
+  };
+  // motion trail while flying in
+  if (t < T.drop) for (let i = 4; i >= 1; i--) { const p = logoState(t - i * 0.035); if (p) drawAt(p.s, p.rot, 0.12 * st.a, logo); }
+  // glint
+  tc.clearRect(0, 0, LS, LS); tc.drawImage(logo, 0, 0, LS, LS);
+  if (t > T.glint0) {
+    const gk = ((t - T.glint0) % T.glintEvery) / 0.8;
+    if (gk <= 1) {
+      tc.globalCompositeOperation = "source-atop";
+      const bx = lerp(-LS * 0.5, LS * 1.5, gk), lg = tc.createLinearGradient(bx - 120, 0, bx + 120, 0);
+      lg.addColorStop(0, "rgba(255,255,255,0)"); lg.addColorStop(0.5, "rgba(255,255,255,0.55)"); lg.addColorStop(1, "rgba(255,255,255,0)");
+      tc.save(); tc.translate(LS / 2, LS / 2); tc.rotate(0.45); tc.translate(-LS / 2, -LS / 2); tc.fillStyle = lg; tc.fillRect(-LS, -LS, LS * 3, LS * 3); tc.restore();
+      tc.globalCompositeOperation = "source-over";
+    }
+  }
+  if (t >= T.drop) { g.save(); g.filter = "blur(16px)"; g.globalAlpha = 0.6; g.drawImage(logo, LX - LS / 2 + 8, LY - LS / 2 + bob + 24, LS, LS); g.restore(); g.filter = "none"; }
+  drawAt(st.s, st.rot, st.a, tmp);
+}
+function drawShock(g, t) {
+  for (const [delay, col] of [[0, "#fff"], [0.12, GREEN]]) {
+    const dt = t - T.drop - delay; if (dt < 0 || dt > 0.8) continue;
+    const k = dt / 0.8, R = lerp(340, 1300, eOut(k)), sz = Math.max(4, snap(lerp(20, 4, k)));
+    g.fillStyle = col; g.globalAlpha = 1 - k;
+    for (let i = 0; i < 160; i++) { const a = (i / 160) * Math.PI * 2; g.fillRect(snap(LX + Math.cos(a) * R), snap(LY + Math.sin(a) * R), sz, sz); }
+  }
+  g.globalAlpha = 1;
+}
+const BURST = (() => { const r = rng(9); return Array.from({ length: 200 }, () => ({ a: r() * 6.283, sp: 350 + r() * 950, r0: 280 + r() * 100, sz: [6, 8, 12][Math.floor(r() * 3)], life: 0.6 + r() * 0.9, c: [GREEN, "#fff", LIME, GOLD][Math.floor(r() * 4)] })); })();
+function drawBurst(g, t) {
+  const dt = t - T.drop; if (dt < 0 || dt > 1.6) return;
+  for (const p of BURST) {
+    if (dt > p.life) continue; const k = dt / p.life;
+    const r = p.r0 + p.sp * dt * (1 - 0.4 * k);
+    g.globalAlpha = 1 - k; g.fillStyle = p.c;
+    g.fillRect(snap(LX + Math.cos(p.a) * r), snap(LY + Math.sin(p.a) * r + 480 * dt * dt), p.sz, p.sz);
+  }
+  g.globalAlpha = 1;
+}
+const PRESENTS = "ПРЕДСТАВЛЯЕТ";
+function drawPresents(g, t) {
+  if (t < T.presents) return;
+  g.save(); g.font = "700 60px Pixelify"; g.textBaseline = "middle"; g.textAlign = "center";
+  const ws = [...PRESENTS].map((c) => g.measureText(c).width + 12), total = ws.reduce((a, b) => a + b, 0);
+  let x = W / 2 - total / 2; const yb = 925;
+  [...PRESENTS].forEach((ch, i) => {
+    const t0 = T.presents + i * (BEAT / 4);
+    const k = seg(t, t0, t0 + 0.35); if (k <= 0) { x += ws[i]; return; }
+    const y = yb - (1 - eBack(k)) * 180 - Math.max(0, Math.sin((beatPos(t) - i * 0.25) * Math.PI)) * 6 * (t > T.presents + 1.2 ? 1 : 0);
+    const cx = x + ws[i] / 2;
+    g.globalAlpha = clamp(k * 3);
+    g.fillStyle = "#000"; g.fillText(ch, cx + 5, y + 6);
+    g.fillStyle = "#1a7a3a"; g.fillText(ch, cx + 3, y + 3);
+    g.fillStyle = "#f6fff7"; g.fillText(ch, cx, y);
+    x += ws[i];
+  });
+  g.restore();
+}
+function drawPrompt(g, t) {
+  if (CAPTURE || t < T.prompt || Math.floor((t - T.prompt) / BEAT) % 2) return;
+  g.save(); g.font = "22px PS2P"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillStyle = GOLD; g.fillText("PRESS START", W / 2, 988); g.restore();
+}
+
+function renderScene(g, t) {
+  const bob = t > T.drop ? Math.sin((t - T.drop) * Math.PI / (BEAT * 4)) * 7 : 0;
+  const sh = t >= T.drop ? Math.exp(-(t - T.drop) * 7) * 22 : 0;
+  g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+  g.save(); g.translate(snap(Math.sin(t * 93) * sh), snap(Math.cos(t * 71) * sh));
+  drawSunburst(g, t, bob);
+  drawWarp(g, t);
+  drawConfetti(g, t);
+  drawEQ(g, t);
+  drawLogo(g, t, bob);
+  drawShock(g, t);
+  drawBurst(g, t);
+  g.restore();
+  drawPresents(g, t);
+  drawMarquee(g, t);
+  drawPrompt(g, t);
+  drawCoin(g, t);
+  const f = t >= T.drop ? Math.exp(-(t - T.drop) * 6) : 0;
+  if (f > 0.01) { g.fillStyle = `rgba(230,255,235,${0.6 * f})`; g.fillRect(0, 0, W, H); }
+  const wf = Math.exp(-Math.abs(t - T.warp) * 12) * (t >= T.warp - 0.05 ? 1 : 0);
+  if (wf > 0.02) { g.fillStyle = `rgba(200,255,215,${0.5 * wf})`; g.fillRect(0, 0, W, H); }
+}
+
+function render(t, outroAt) {
+  const out = outroAt == null ? -1 : t - outroAt;
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+  if (out > T.outroLen) return true;
+  renderScene(sc, t);
+  sc.drawImage(scan, 0, 0); sc.drawImage(vign, 0, 0);
+  if (out >= 0) {
+    // iris-out onto the logo, with a neon rim
+    const k = eIn(seg(out, 0, 0.95)), R = lerp(1250, 0, k);
+    if (R > 1) {
+      ctx.save(); ctx.beginPath(); ctx.arc(LX, LY, R, 0, Math.PI * 2); ctx.clip(); ctx.drawImage(scene, 0, 0); ctx.restore();
+      ctx.strokeStyle = GREEN; ctx.lineWidth = 10; ctx.beginPath(); ctx.arc(LX, LY, R + 5, 0, Math.PI * 2); ctx.stroke();
+    }
+    return false;
+  }
+  ctx.drawImage(scene, 0, 0);
+  return false;
+}
+
+// ---------------- music: chiptune 140 BPM ----------------
+function scheduleAudio(ac, dest, t0, opts) {
+  const { outroAt = null, loops = 1 } = opts || {};
+  const master = ac.createGain(); master.gain.value = 0.5;
+  const comp = ac.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4;
+  comp.connect(master); master.connect(dest);
+  const out = comp;
+  const pulse = (() => { const n = 40, re = new Float32Array(n), im = new Float32Array(n), d = 0.25; for (let i = 1; i < n; i++) re[i] = (2 / (i * Math.PI)) * Math.sin(i * Math.PI * d); return ac.createPeriodicWave(re, im); })();
+  const N = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  const tone = (wave, f0, at, dur, vol, f1, vib) => {
+    const o = ac.createOscillator(), g = ac.createGain(), T0 = t0 + at;
+    if (wave === "pulse") o.setPeriodicWave(pulse); else o.type = wave;
+    o.frequency.setValueAtTime(f0, T0); if (f1) o.frequency.exponentialRampToValueAtTime(f1, T0 + dur);
+    if (vib) { const l = ac.createOscillator(), lg = ac.createGain(); l.frequency.value = 6; lg.gain.value = f0 * 0.012; l.connect(lg); lg.connect(o.frequency); l.start(T0 + 0.12); l.stop(T0 + dur + 0.05); }
+    g.gain.setValueAtTime(0.0001, T0); g.gain.exponentialRampToValueAtTime(vol, T0 + 0.006);
+    g.gain.setValueAtTime(vol, T0 + Math.max(0.01, dur * 0.6)); g.gain.exponentialRampToValueAtTime(0.0001, T0 + dur);
+    o.connect(g); g.connect(out); o.start(T0); o.stop(T0 + dur + 0.05);
+  };
+  const nb = (() => { const b = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), d = b.getChannelData(0), r = rng(5); for (let i = 0; i < d.length; i++) d[i] = r() * 2 - 1; return b; })();
+  const noise = (at, dur, vol, type, f0, f1) => {
+    const s = ac.createBufferSource(), fl = ac.createBiquadFilter(), g = ac.createGain(), T0 = t0 + at;
+    s.buffer = nb; fl.type = type; fl.frequency.setValueAtTime(f0, T0); if (f1) fl.frequency.exponentialRampToValueAtTime(f1, T0 + dur);
+    g.gain.setValueAtTime(vol, T0); g.gain.exponentialRampToValueAtTime(0.0001, T0 + dur);
+    s.connect(fl); fl.connect(g); g.connect(out); s.start(T0); s.stop(T0 + dur + 0.05);
+  };
+  const kick = (at) => { tone("sine", 150, at, 0.22, 0.95, 42); noise(at, 0.03, 0.25, "lowpass", 3000); };
+  const snare = (at) => { noise(at, 0.16, 0.45, "bandpass", 1900); tone("triangle", 200, at, 0.08, 0.3, 120); };
+  const hat = (at, v = 0.12) => noise(at, 0.035, v, "highpass", 7500);
+  const crash = (at) => noise(at, 1.4, 0.35, "highpass", 3000, 6000);
+
+  const finale = (fin) => {
+    crash(fin); kick(fin);
+    [57, 64, 69, 72, 76].forEach((m, i) => tone(i < 2 ? "triangle" : "pulse", N(m), fin, 1.5, i < 2 ? 0.3 : 0.08, 0, true));
+    [88, 84, 81, 76, 72, 69].forEach((m, i) => tone("pulse", N(m), fin + 0.1 + i * 0.07, 0.12, 0.05));
+  };
+  if (opts && opts.finaleOnly) { finale(0); return master; }
+  // coin + credit
+  tone("pulse", N(83), T.coin, 0.07, 0.18); tone("pulse", N(88), T.coin + 0.07, 0.35, 0.18);
+  tone("square", N(76), T.coin + 0.5, 0.06, 0.08); tone("square", N(83), T.coin + 0.58, 0.1, 0.08);
+  // warp whoosh + build-up (arpeggio rising, riser, kicks, snare roll)
+  noise(T.warp - 0.05, 0.6, 0.4, "bandpass", 400, 5000);
+  const build = T.drop - T.warp, sixteenth = BEAT / 4;
+  const arp = [57, 60, 64, 69];
+  for (let i = 0, at = T.warp; at < T.drop - 0.01; i++, at += sixteenth) {
+    const oct = Math.floor(((at - T.warp) / build) * 3) * 12;
+    tone("pulse", N(arp[i % 4] + oct), at, sixteenth * 0.9, 0.06 + 0.06 * ((at - T.warp) / build));
+  }
+    { const s = ac.createBufferSource(), fl = ac.createBiquadFilter(), g = ac.createGain(); s.buffer = nb; s.loop = true; fl.type = "bandpass"; fl.Q.value = 3;
+    fl.frequency.setValueAtTime(300, t0 + T.warp); fl.frequency.exponentialRampToValueAtTime(8000, t0 + T.drop);
+    g.gain.setValueAtTime(0.0001, t0 + T.warp); g.gain.exponentialRampToValueAtTime(0.22, t0 + T.drop - 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + T.drop + 0.05);
+    s.connect(fl); fl.connect(g); g.connect(out); s.start(t0 + T.warp); s.stop(t0 + T.drop + 0.1); }
+  for (let b = -4; b < 0; b++) kick(T.drop + b * BEAT);
+  for (let i = 0; i < 8; i++) snare(T.drop - BEAT + i * (BEAT / 8));
+  tone("sine", 900, T.drop - 0.5, 0.5, 0.12, 3200);
+
+  // main theme: Am – F – C – G, lead (25% pulse), bass (triangle), arps, drums
+  const LEAD = [
+    [[76, 0, .5], [81, .5, .5], [84, 1, .5], [83, 1.5, .5], [81, 2, 1], [76, 3, .5], [79, 3.5, .5]],
+    [[81, 0, .5], [84, .5, .5], [89, 1, 1], [88, 2, .5], [84, 2.5, .5], [81, 3, 1]],
+    [[79, 0, .5], [84, .5, .5], [88, 1, .5], [86, 1.5, .5], [84, 2, 1], [79, 3, .5], [84, 3.5, .5]],
+    [[86, 0, .5], [83, .5, .5], [79, 1, .5], [83, 1.5, .5], [86, 2, .75], [88, 2.75, .25], [86, 3, .5], [83, 3.5, .5]],
+  ];
+  const ROOT = [45, 41, 48, 43], CH = [[57, 60, 64], [53, 57, 60], [55, 60, 64], [55, 59, 62]];
+  const bars = 4 * loops;
+  for (let bar = 0; bar < bars; bar++) {
+    const b0 = T.drop + bar * BAR, j = bar % 4;
+    if (outroAt != null && b0 >= outroAt - 0.01) break;
+    LEAD[j].forEach(([m, at, d]) => { tone("pulse", N(m), b0 + at * BEAT, d * BEAT * 0.92, 0.1, 0, d >= 1); tone("square", N(m - 12) * 1.003, b0 + at * BEAT, d * BEAT * 0.8, 0.025); });
+    for (let e = 0; e < 8; e++) tone("triangle", N(ROOT[j] + (e % 2 ? 12 : 0)), b0 + e * BEAT / 2, BEAT / 2 * 0.85, 0.32);
+    for (let s = 0; s < 16; s++) tone("square", N(CH[j][s % 3] + 12), b0 + s * BEAT / 4, BEAT / 4 * 0.7, 0.018);
+    for (let q = 0; q < 4; q++) { const at = b0 + q * BEAT; if (q % 2 === 0) kick(at); else snare(at); hat(at + BEAT / 2); hat(at, 0.06); }
+    if (bar % 4 === 3) { snare(b0 + 3.5 * BEAT); snare(b0 + 3.75 * BEAT); } else kick(b0 + 2.5 * BEAT);
+  }
+  crash(T.drop); tone("sine", 70, T.drop, 0.8, 0.6, 35);
+  // glint shimmers
+  for (let g0 = T.glint0; g0 < (outroAt ?? T.drop + bars * BAR); g0 += T.glintEvery) tone("sine", 2600, g0 + 0.2, 0.3, 0.035, 7000);
+  // "ПРЕДСТАВЛЯЕТ" letter blips
+  for (let i = 0; i < PRESENTS.length; i++) tone("pulse", N(88 + (i % 4) * 2), T.presents + i * BEAT / 4 + 0.12, 0.05, 0.03);
+  // finale (outro)
+  if (outroAt != null) finale(outroAt);
+  return master;
+}
+
+async function renderAudioWav(seconds, outroAt) {
+  const sr = 48000, oc = new OfflineAudioContext(2, Math.ceil(sr * seconds), sr);
+  scheduleAudio(oc, oc.destination, 0, { outroAt, loops: 1 });
+  const buf = await oc.startRendering(), L = buf.getChannelData(0), R = buf.getChannelData(1), n = L.length;
+  const ab = new ArrayBuffer(44 + n * 4), dv = new DataView(ab), ws = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, "RIFF"); dv.setUint32(4, 36 + n * 4, true); ws(8, "WAVEfmt "); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 2, true);
+  dv.setUint32(24, sr, true); dv.setUint32(28, sr * 4, true); dv.setUint16(32, 4, true); dv.setUint16(34, 16, true); ws(36, "data"); dv.setUint32(40, n * 4, true);
+  for (let i = 0; i < n; i++) { dv.setInt16(44 + i * 4, clamp(L[i], -1, 1) * 32767, true); dv.setInt16(46 + i * 4, clamp(R[i], -1, 1) * 32767, true); }
+  let bin = ""; const u8 = new Uint8Array(ab); for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+// ---------------- live playback ----------------
+let start = null, outroAt = null, ac = null, bus = null, done = false;
+function gate(t) {
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  if (Math.floor(t * 1.6) % 2 === 0) { ctx.font = "30px PS2P"; ctx.fillStyle = LIME; ctx.fillText("▶ НАЖМИТЕ, ЧТОБЫ НАЧАТЬ", W / 2, H / 2); }
+  ctx.font = "16px PS2P"; ctx.fillStyle = "rgba(166,255,59,0.45)"; ctx.fillText("ЗВУК ВКЛЮЧИТСЯ ПОСЛЕ НАЖАТИЯ", W / 2, H / 2 + 60);
+}
+function begin(sound) {
+  start = performance.now() / 1000;
+  if (sound) { ac = new (window.AudioContext || window.webkitAudioContext)(); bus = scheduleAudio(ac, ac.destination, ac.currentTime + 0.03, { loops: 12 }); }
+}
+function onInput() {
+  if (start === null) { begin(true); return; }
+  const t = performance.now() / 1000 - start;
+  if (outroAt === null && t > T.drop + 0.6) {
+    outroAt = t;
+    if (ac) { bus.gain.setTargetAtTime(0, ac.currentTime, 0.05); scheduleAudio(ac, ac.destination, ac.currentTime + 0.02, { finaleOnly: true }); }
+  }
+}
+function loop() {
+  const now = performance.now() / 1000;
+  if (start === null) gate(now);
+  else if (render(now - start, outroAt) && !done) { done = true; window.dispatchEvent(new Event("yarmak:intro-end")); try { parent.postMessage({ type: "yarmak:intro-end" }, "*"); } catch (e) {} }
+  requestAnimationFrame(loop);
+}
+
+Promise.all([new Promise((r) => (logo.complete ? r() : (logo.onload = r))), document.fonts.load("44px PS2P", "INSERT COIN ЗВУК"), document.fonts.load("700 60px Pixelify", PRESENTS)]).then(() => {
+  prepare();
+  if (CAPTURE) { window.renderFrame = (t) => render(t, T.videoOutro); window.renderAudioWav = renderAudioWav; window.READY = true; return; }
+  if (params.has("autoplay")) begin(false);
+  addEventListener("keydown", onInput); addEventListener("pointerdown", onInput);
+  loop();
+});
+</script>
+</body>
+</html>
